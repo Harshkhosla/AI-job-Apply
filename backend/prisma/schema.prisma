@@ -42,6 +42,7 @@ model Job {
   title           String
   location        String?
   remote          Boolean  @default(false)
+  easyApply       Boolean  @default(false)
   employmentType  String?
   description     String   // raw text/HTML stripped
   salaryMin       Int?

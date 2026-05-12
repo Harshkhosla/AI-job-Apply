@@ -30,6 +30,13 @@ import {
   fillLinkedInApplication,
   closeLinkedInBrowser,
 } from "./services/applications.js";
+import {
+  startBatch,
+  getBatch,
+  listBatches,
+  proceedBatch,
+  cancelBatch,
+} from "./services/batchApply.js";
 
 const app = express();
 app.use(cors());
@@ -74,8 +81,10 @@ app.get("/api/jobs", async (req, res) => {
     page = "1",
     pageSize = "25",
     fit,
+    easyApply,
   } = req.query as Record<string, string>;
   const where: any = {};
+  if (easyApply === "1" || easyApply === "true") where.easyApply = true;
   if (status) where.status = status;
   if (source) where.source = source;
   if (minScore) where.score = { gte: Number(minScore) };
@@ -342,6 +351,35 @@ app.post("/api/applications/:id/fill-linkedin", async (req, res) => {
 app.post("/api/linkedin/close", async (_req, res) => {
   await closeLinkedInBrowser();
   res.json({ ok: true });
+});
+
+// Batch apply
+app.post("/api/batch", async (req, res) => {
+  try {
+    const ids: string[] = req.body?.jobIds ?? [];
+    if (!Array.isArray(ids) || ids.length === 0)
+      return res.status(400).json({ error: "jobIds required" });
+    const s = await startBatch(ids);
+    res.json(s);
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message ?? String(e) });
+  }
+});
+app.get("/api/batch/:id", (req, res) => {
+  const s = getBatch(req.params.id);
+  if (!s) return res.status(404).json({ error: "not found" });
+  res.json(s);
+});
+app.post("/api/batch/:id/next", (req, res) => {
+  const ok = proceedBatch(req.params.id);
+  res.json({ ok });
+});
+app.post("/api/batch/:id/cancel", (req, res) => {
+  const ok = cancelBatch(req.params.id);
+  res.json({ ok });
+});
+app.get("/api/batch", (_req, res) => {
+  res.json(listBatches());
 });
 
 const port = Number(process.env.PORT ?? 4000);

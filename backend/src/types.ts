@@ -8,6 +8,7 @@ export interface NormalizedJob {
   title: string;
   location?: string;
   remote?: boolean;
+  easyApply?: boolean;
   employmentType?: string;
   description: string;
   salaryMin?: number;

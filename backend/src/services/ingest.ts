@@ -22,6 +22,7 @@ export interface IngestRequest {
   location?: string;
   pages?: number;
   withinHours?: number;
+  easyApplyOnly?: boolean;
 }
 
 export async function ingest(req: IngestRequest): Promise<{ inserted: number; total: number }> {
@@ -45,7 +46,8 @@ export async function ingest(req: IngestRequest): Promise<{ inserted: number; to
           req.query,
           req.location ?? "",
           req.pages ?? 1,
-          req.withinHours
+          req.withinHours,
+          !!req.easyApplyOnly
         );
         // hydrate descriptions (best-effort)
         for (const j of jobs) {
@@ -82,6 +84,7 @@ export async function ingest(req: IngestRequest): Promise<{ inserted: number; to
             title: j.title,
             location: j.location,
             remote: j.remote ?? false,
+            easyApply: j.easyApply ?? false,
             employmentType: j.employmentType,
             description: j.description,
             salaryMin: j.salaryMin,
@@ -93,6 +96,8 @@ export async function ingest(req: IngestRequest): Promise<{ inserted: number; to
             description: j.description || undefined,
             location: j.location,
             url: j.url,
+            // Only overwrite easyApply to true (never demote)
+            ...(j.easyApply ? { easyApply: true } : {}),
           },
         });
         inserted++;
@@ -199,7 +204,8 @@ export async function ingestAll(opts: IngestAllOptions = {}): Promise<IngestAllR
             task.search.query,
             task.search.location ?? "",
             task.search.pages ?? 1,
-            opts.hours
+            opts.hours,
+            !!task.search.easyApplyOnly
           );
           // Best-effort: hydrate first ~10 descriptions to keep total request count modest
           for (const j of jobs.slice(0, 10)) {
@@ -240,6 +246,7 @@ export async function ingestAll(opts: IngestAllOptions = {}): Promise<IngestAllR
                 title: j.title,
                 location: j.location,
                 remote: j.remote ?? false,
+                easyApply: j.easyApply ?? false,
                 employmentType: j.employmentType,
                 description: j.description,
                 salaryMin: j.salaryMin,
@@ -252,6 +259,7 @@ export async function ingestAll(opts: IngestAllOptions = {}): Promise<IngestAllR
                 location: j.location,
                 url: j.url,
                 postedAt: j.postedAt,
+                ...(j.easyApply ? { easyApply: true } : {}),
               },
             });
             result.inserted++;

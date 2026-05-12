@@ -11,11 +11,15 @@ export async function fetchLinkedIn(
   keywords: string,
   location = "",
   pages = 1,
-  withinHours?: number
+  withinHours?: number,
+  easyApplyOnly = false
 ): Promise<NormalizedJob[]> {
   const jobs: NormalizedJob[] = [];
-  // LinkedIn supports a "time posted" filter: f_TPR=r<seconds>
+  // LinkedIn filters:
+  //   f_TPR=r<seconds>  -> jobs posted within N seconds
+  //   f_AL=true         -> Easy Apply only
   const tpr = withinHours ? `&f_TPR=r${Math.round(withinHours * 3600)}` : "";
+  const easy = easyApplyOnly ? "&f_AL=true" : "";
   for (let page = 0; page < pages; page++) {
     const start = page * 25;
     const url =
@@ -23,7 +27,8 @@ export async function fetchLinkedIn(
       `?keywords=${encodeURIComponent(keywords)}` +
       `&location=${encodeURIComponent(location)}` +
       `&start=${start}` +
-      tpr;
+      tpr +
+      easy;
     const res = await fetch(url, {
       headers: {
         "User-Agent":
@@ -50,7 +55,16 @@ export async function fetchLinkedIn(
       const idMatch = link?.match(/-(\d+)\?/) || link?.match(/\/(\d+)$/);
       if (!link || !title || !company || !idMatch) continue;
       const id = idMatch[1];
-      // Description fetched lazily — keep stub here
+
+      // Easy Apply detection. LinkedIn's guest search markup varies; we look
+      // for a dedicated badge, a tracking attribute, or the literal text.
+      const cardText = $card.text();
+      const easyApply =
+        easyApplyOnly ||
+        $card.find(".job-search-card__easy-apply-label").length > 0 ||
+        $card.find("[data-tracking-control-name*='easy']").length > 0 ||
+        /\beasy apply\b/i.test(cardText);
+
       jobs.push({
         source: "linkedin",
         sourceJobId: id,
@@ -59,6 +73,7 @@ export async function fetchLinkedIn(
         title,
         location: loc,
         remote: /remote/i.test(loc),
+        easyApply,
         description: "",
         postedAt: dateTime ? new Date(dateTime) : undefined,
       });

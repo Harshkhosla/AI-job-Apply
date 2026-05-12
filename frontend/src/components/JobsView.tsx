@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type Job } from "../api";
 import JobDetail from "./JobDetail";
+import BatchApplyModal from "./BatchApplyModal";
 
 export default function JobsView() {
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -16,7 +17,10 @@ export default function JobsView() {
     sort: "score",
     hours: "",
     fit: "",
+    easyApply: "",
   });
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [batchModal, setBatchModal] = useState(false);
   const [loading, setLoading] = useState(false);
   const [scoring, setScoring] = useState<null | { done: number; total: number; failed: number }>(null);
 
@@ -107,6 +111,15 @@ export default function JobsView() {
         >
           {filters.fit ? "✓ Best for me" : "Best for me"}
         </button>
+        <button
+          className={filters.easyApply ? "primary" : ""}
+          onClick={() =>
+            setFilters({ ...filters, easyApply: filters.easyApply ? "" : "1" })
+          }
+          title="Only LinkedIn jobs with Easy Apply"
+        >
+          {filters.easyApply ? "✓ Easy Apply only" : "Easy Apply only"}
+        </button>
         <select value={filters.hours} onChange={(e) => setFilters({ ...filters, hours: e.target.value })}>
           <option value="">Any time</option>
           <option value="24">Last 24h</option>
@@ -147,6 +160,14 @@ export default function JobsView() {
         >
           Clear scores
         </button>
+        <button
+          className="primary"
+          onClick={() => setBatchModal(true)}
+          disabled={selectedIds.length === 0}
+          title="Auto-apply to the selected jobs sequentially"
+        >
+          Batch Apply ({selectedIds.length})
+        </button>
         <span style={{ color: "var(--muted)", fontSize: 12, marginLeft: "auto" }}>
           {total} jobs · page {page}/{totalPages}
         </span>
@@ -164,6 +185,19 @@ export default function JobsView() {
                   job={j}
                   selected={selected?.id === j.id}
                   onClick={() => setSelected(j)}
+                  checked={selectedIds.includes(j.id)}
+                  onToggleSelect={(checked) => {
+                    setSelectedIds((prev) => {
+                      if (checked) {
+                        if (prev.length >= 10) {
+                          alert("Maximum 10 jobs per batch.");
+                          return prev;
+                        }
+                        return prev.includes(j.id) ? prev : [...prev, j.id];
+                      }
+                      return prev.filter((x) => x !== j.id);
+                    });
+                  }}
                 />
               ))
             )}
@@ -197,6 +231,16 @@ export default function JobsView() {
           </div>
         </div>
       </div>
+      {batchModal && (
+        <BatchApplyModal
+          jobs={jobs.filter((j) => selectedIds.includes(j.id))}
+          onClose={() => {
+            setBatchModal(false);
+            setSelectedIds([]);
+            load(page);
+          }}
+        />
+      )}
     </>
   );
 }
@@ -205,23 +249,49 @@ function JobRow({
   job,
   selected,
   onClick,
+  checked,
+  onToggleSelect,
 }: {
   job: Job;
   selected: boolean;
   onClick: () => void;
+  checked: boolean;
+  onToggleSelect: (checked: boolean) => void;
 }) {
   const scoreClass =
     job.score == null ? "" : job.score >= 80 ? "score-high" : job.score >= 60 ? "score-mid" : "score-low";
   return (
     <div className={`job-row ${selected ? "selected" : ""}`} onClick={onClick}>
-      <div className="title">
-        {job.title}
-        {job.score != null && <span className={`score-badge ${scoreClass}`}>{Math.round(job.score)}</span>}
-      </div>
-      <div className="meta">
-        {job.company} · {job.location || (job.remote ? "Remote" : "—")} ·{" "}
-        <span className="tag">{job.source}</span>
-        {job.status !== "new" && <span className="tag">{job.status}</span>}
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+        <input
+          type="checkbox"
+          checked={checked}
+          onClick={(e) => e.stopPropagation()}
+          onChange={(e) => onToggleSelect(e.target.checked)}
+          title="Select for batch apply"
+          style={{ marginTop: 4 }}
+        />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="title">
+            {job.title}
+            {job.score != null && (
+              <span className={`score-badge ${scoreClass}`}>{Math.round(job.score)}</span>
+            )}
+            {job.easyApply && (
+              <span
+                className="tag"
+                style={{ background: "rgba(79, 156, 249, 0.18)", color: "var(--accent)", marginLeft: 6 }}
+              >
+                Easy Apply
+              </span>
+            )}
+          </div>
+          <div className="meta">
+            {job.company} · {job.location || (job.remote ? "Remote" : "—")} ·{" "}
+            <span className="tag">{job.source}</span>
+            {job.status !== "new" && <span className="tag">{job.status}</span>}
+          </div>
+        </div>
       </div>
     </div>
   );

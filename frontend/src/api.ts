@@ -7,6 +7,7 @@ export interface Job {
   title: string;
   location?: string | null;
   remote: boolean;
+  easyApply?: boolean;
   employmentType?: string | null;
   description: string;
   salaryMin?: number | null;
@@ -159,4 +160,12 @@ export const api = {
     ),
   closeLinkedInBrowser: () =>
     req<{ ok: boolean }>("/api/linkedin/close", { method: "POST" }),
+
+  // Batch apply
+  startBatch: (jobIds: string[]) =>
+    req<any>("/api/batch", { method: "POST", body: JSON.stringify({ jobIds }) }),
+  getBatch: (id: string) => req<any>(`/api/batch/${id}`),
+  nextBatch: (id: string) => req<{ ok: boolean }>(`/api/batch/${id}/next`, { method: "POST" }),
+  cancelBatch: (id: string) =>
+    req<{ ok: boolean }>(`/api/batch/${id}/cancel`, { method: "POST" }),
 };
