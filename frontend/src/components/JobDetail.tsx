@@ -1,9 +1,13 @@
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { api, type Job } from "../api";
+import ApplyPanel from "./ApplyPanel";
+
+type DetailTab = "overview" | "apply";
 
 export default function JobDetail({ job, onChange }: { job: Job; onChange: () => void }) {
   const [busy, setBusy] = useState<string | null>(null);
+  const [tab, setTab] = useState<DetailTab>("overview");
   const [resume, setResume] = useState<string | null>(job.tailoredResume ?? null);
   const [outreach, setOutreach] = useState<{ subject: string; body: string } | null>(
     job.outreach ? safeParse(job.outreach) : null
@@ -28,6 +32,36 @@ export default function JobDetail({ job, onChange }: { job: Job; onChange: () =>
         {job.company} · {job.location || (job.remote ? "Remote" : "—")} · <span className="tag">{job.source}</span>
       </div>
 
+      <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border)", marginBottom: 12 }}>
+        <button
+          onClick={() => setTab("overview")}
+          style={{
+            border: "none", background: "transparent", borderRadius: 0, padding: "8px 14px",
+            borderBottom: tab === "overview" ? "2px solid var(--accent)" : "2px solid transparent",
+            color: tab === "overview" ? "var(--text)" : "var(--muted)",
+          }}
+        >
+          Overview
+        </button>
+        <button
+          onClick={() => setTab("apply")}
+          style={{
+            border: "none", background: "transparent", borderRadius: 0, padding: "8px 14px",
+            borderBottom: tab === "apply" ? "2px solid var(--accent)" : "2px solid transparent",
+            color: tab === "apply" ? "var(--text)" : "var(--muted)",
+          }}
+        >
+          Apply
+        </button>
+      </div>
+
+      {tab === "apply" ? <ApplyPanel job={job} /> : <Overview />}
+    </div>
+  );
+
+  function Overview() {
+    return (
+      <>
       <div className="actions">
         <a href={job.url} target="_blank" rel="noreferrer"><button className="primary">Open posting →</button></a>
         <button onClick={() => run("score", async () => { await api.score(job.id); onChange(); })} disabled={!!busy}>
@@ -93,8 +127,9 @@ export default function JobDetail({ job, onChange }: { job: Job; onChange: () =>
         <h4>Job description</h4>
         <pre style={{ maxHeight: 300, overflow: "auto" }}>{job.description || "(no description fetched)"}</pre>
       </div>
-    </div>
-  );
+      </>
+    );
+  }
 }
 
 function safeParse(s: string): any {

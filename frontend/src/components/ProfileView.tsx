@@ -400,8 +400,41 @@ function ApplicationTab({
 }) {
   const a = profile.application ?? {};
   const set = (patch: any) => updNested("application", patch);
+  const [uploading, setUploading] = useState(false);
+
+  async function onUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setUploading(true);
+    try {
+      const r = await api.uploadResume(f);
+      alert(`Uploaded ${r.filename}`);
+      window.location.reload();
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
   return (
     <>
+      <div className="section">
+        <h4>Resume file</h4>
+        <p style={{ color: "var(--muted)", fontSize: 12, marginTop: 0 }}>
+          Upload a PDF — the auto-apply bot will attach this for resume fields. Max 5 MB.
+        </p>
+        {profile.resumeFileUrl ? (
+          <div style={{ marginBottom: 8 }}>
+            <a href={profile.resumeFileUrl} target="_blank" rel="noreferrer">{profile.resumeFileUrl}</a>
+          </div>
+        ) : (
+          <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 8 }}>No resume uploaded.</div>
+        )}
+        <input type="file" accept="application/pdf" onChange={onUpload} disabled={uploading} />
+        {uploading && <span style={{ marginLeft: 8 }}>Uploading…</span>}
+      </div>
+
       <div className="section">
         <h4>Application defaults</h4>
         <p style={{ color: "var(--muted)", fontSize: 12, marginTop: 0 }}>

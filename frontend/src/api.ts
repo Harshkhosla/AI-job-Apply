@@ -120,5 +120,35 @@ export const api = {
   getProfile: () => req<Profile | null>("/api/profile"),
   saveProfile: (p: Profile) =>
     req<{ ok: boolean }>("/api/profile", { method: "PUT", body: JSON.stringify(p) }),
+  uploadResume: async (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    const r = await fetch("/api/profile/resume", { method: "POST", body: form });
+    if (!r.ok) throw new Error(`${r.status}: ${await r.text()}`);
+    return r.json() as Promise<{ url: string; filename: string }>;
+  },
   runs: () => req<any[]>("/api/runs"),
+
+  // Auto-apply
+  planApplication: (jobId: string, withCoverLetter = false) =>
+    req<any>(`/api/jobs/${jobId}/apply/plan`, {
+      method: "POST",
+      body: JSON.stringify({ withCoverLetter }),
+    }),
+  getApplication: (jobId: string) => req<any | null>(`/api/jobs/${jobId}/apply`),
+  updateField: (applicationId: string, fieldId: string, value: any) =>
+    req<any>(
+      `/api/applications/${applicationId}/fields/${encodeURIComponent(fieldId)}`,
+      { method: "PATCH", body: JSON.stringify({ value }) }
+    ),
+  listApplications: (status?: string) =>
+    req<any[]>(`/api/applications${status ? `?status=${status}` : ""}`),
+  submitApplication: (id: string, dryRun = true) =>
+    req<any>(`/api/applications/${id}/submit`, {
+      method: "POST",
+      body: JSON.stringify({ dryRun }),
+    }),
+  getAutoApplySettings: () => req<any>("/api/settings/auto-apply"),
+  saveAutoApplySettings: (p: any) =>
+    req<any>("/api/settings/auto-apply", { method: "PUT", body: JSON.stringify(p) }),
 };

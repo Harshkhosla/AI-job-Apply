@@ -56,6 +56,7 @@ model Job {
   outreach        String?  // JSON {subject, body, recruiter?}
   status          String   @default("new") // new | shortlisted | applied | rejected | hidden
   notes           String?
+  applications    Application[]
 
   @@unique([source, sourceJobId])
   @@index([status])
@@ -70,4 +71,43 @@ model IngestionRun {
   error      String?
   startedAt  DateTime @default(now())
   finishedAt DateTime?
+}
+
+// One row per application attempt for a given job.
+// Lifecycle: draft -> preview -> submitted | failed | skipped
+model Application {
+  id              String   @id @default(cuid())
+  jobId           String
+  job             Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  status          String   @default("draft")
+  formSchema      String?  // JSON: raw fields parsed from the form
+  fieldPlan       String?  // JSON: {fields: [{id, label, value, source, confidence}], unresolved: [...]}
+  coverLetter     String?
+  resumeUsed      String?  // path or marker (e.g. "profile.resumeFileUrl")
+  payload         String?  // JSON the bot would send
+  rawResponse     String?  // response from ATS submission
+  confirmationId  String?
+  errors          String?  // JSON list
+  dryRun          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  submittedAt     DateTime?
+  updatedAt       DateTime @updatedAt
+
+  @@index([jobId])
+  @@index([status])
+}
+
+// Global auto-apply settings (single-row table; we read findFirst())
+model AutoApplySettings {
+  id                  String   @id @default(cuid())
+  enabled             Boolean  @default(false)
+  dailyCap            Int      @default(10)
+  appliedToday        Int      @default(0)
+  lastCounterReset    DateTime @default(now())
+  minScore            Int      @default(75)
+  allowedSources      String   @default("greenhouse,lever,ashby") // CSV
+  requireApproval     Boolean  @default(true) // must click Submit; no full auto
+  // Cached Claude answers to ambiguous questions, keyed by "company::questionHash"
+  qaCache             String?  // JSON dict
+  updatedAt           DateTime @updatedAt
 }

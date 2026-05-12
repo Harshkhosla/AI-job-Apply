@@ -2,8 +2,9 @@ import { useState } from "react";
 import JobsView from "./components/JobsView";
 import IngestView from "./components/IngestView";
 import ProfileView from "./components/ProfileView";
+import ApplicationsView from "./components/ApplicationsView";
 
-type View = "jobs" | "ingest" | "profile";
+type View = "jobs" | "applications" | "ingest" | "profile";
 
 export default function App() {
   const [view, setView] = useState<View>("jobs");
@@ -18,6 +19,12 @@ export default function App() {
             onClick={() => setView("jobs")}
           >
             Jobs
+          </button>
+          <button
+            className={view === "applications" ? "active" : ""}
+            onClick={() => setView("applications")}
+          >
+            Applications
           </button>
           <button
             className={view === "ingest" ? "active" : ""}
@@ -39,6 +46,7 @@ export default function App() {
       </aside>
       <main className="main">
         {view === "jobs" && <JobsView />}
+        {view === "applications" && <ApplicationsView />}
         {view === "ingest" && <IngestView />}
         {view === "profile" && <ProfileView />}
       </main>

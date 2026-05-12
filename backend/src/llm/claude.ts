@@ -160,6 +160,82 @@ Return JSON only.`;
   return callJSON<ScoreResult>(system, user, 800);
 }
 
+/* ----- Application form helpers ----- */
+
+export interface AnswerFieldRequest {
+  field: { id: string; label: string; type: string; options?: { value: string; label: string }[]; description?: string };
+  profile: ProfileData;
+  context: { jobTitle: string; jobCompany: string; jobDescription: string };
+}
+
+export interface AnswerFieldResult {
+  value: any;
+  confidence: number; // 0-1
+  reason: string;
+}
+
+/**
+ * Asks Claude to answer a single application-form question from the profile,
+ * with explicit instructions to leave fields blank if it can't answer truthfully.
+ */
+export async function answerFormField(req: AnswerFieldRequest): Promise<AnswerFieldResult> {
+  const optionsBlock =
+    req.field.options && req.field.options.length > 0
+      ? `\nOPTIONS (choose one or comma-list for multi):\n${req.field.options.map((o) => `- ${o.value} : ${o.label}`).join("\n")}`
+      : "";
+  const system =
+    "You answer ONE field of a job application form on behalf of a candidate, using ONLY their profile data. " +
+    "Return STRICT JSON only: {\"value\": any, \"confidence\": number 0-1, \"reason\": string}. " +
+    "RULES: " +
+    "(1) Never fabricate facts not in the profile. " +
+    "(2) If unsure or no truthful answer exists, return value=null with confidence<=0.3 and a reason. " +
+    "(3) For yes/no questions about work authorization, sponsorship, relocation, return the candidate's stated preference if known. " +
+    "(4) For salary, only answer if the profile has expected/min salary; otherwise return null. " +
+    "(5) For 'why this company?' / cover-letter-ish fields, write 2-4 sentences personalized to the company using the candidate's actual experience. " +
+    "(6) For EEO/voluntary disclosure, return null unless explicitly present in profile.personal.";
+  const user = `FIELD:
+id: ${req.field.id}
+label: ${req.field.label}
+type: ${req.field.type}
+description: ${req.field.description ?? ""}${optionsBlock}
+
+CONTEXT:
+Job title: ${req.context.jobTitle}
+Company: ${req.context.jobCompany}
+Job description excerpt:
+${req.context.jobDescription.slice(0, 2000)}
+
+CANDIDATE PROFILE:
+${JSON.stringify(req.profile, null, 2)}
+
+Return JSON only.`;
+  return callJSON<AnswerFieldResult>(system, user, 600);
+}
+
+export async function generateCoverLetter(
+  profile: ProfileData,
+  job: NormalizedJob
+): Promise<string> {
+  const system =
+    "You write concise, honest cover letters for software roles. 180-260 words. " +
+    "Tone: warm, specific, no fluff. Use the candidate's actual experience. Output plain text only.";
+  const seed = profile.application?.coverLetterSnippet ?? "";
+  const why = profile.application?.whyThisCompany ?? "";
+  const user = `CANDIDATE: ${profile.name} — ${profile.headline ?? ""}
+Top skills: ${(profile.skills ?? []).slice(0, 12).join(", ")}
+Reusable pitch: ${seed}
+General "why this company": ${why}
+
+TARGET JOB:
+Company: ${job.company}
+Title: ${job.title}
+Description excerpt:
+${job.description.slice(0, 3000)}
+
+Write a complete cover letter, plain text only.`;
+  return callText(system, user, 900);
+}
+
 export async function tailorResume(profile: ProfileData, job: NormalizedJob): Promise<string> {
   const system =
     "You are an elite resume writer. Tailor the candidate's master resume for a specific job. " +

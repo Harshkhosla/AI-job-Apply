@@ -9,6 +9,8 @@ dotenv.config({ path: path.resolve(__dirname, "../.env") }); // doesn't override
 
 import express from "express";
 import cors from "cors";
+import multer from "multer";
+import fs from "node:fs";
 import { prisma } from "./db.js";
 import { ingest, ingestAll } from "./services/ingest.js";
 import { getProfile, upsertProfile } from "./services/profile.js";
@@ -18,10 +20,28 @@ import {
   generateOutreachForJob,
   scoreBatch,
 } from "./services/actions.js";
+import {
+  planApplication,
+  getApplicationByJob,
+  listApplications,
+  updateFieldValue,
+  getOrCreateSettings,
+  updateSettings,
+} from "./services/applications.js";
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
+
+// Resume storage: backend/data/resumes/
+const DATA_DIR = path.resolve(__dirname, "../data");
+const RESUME_DIR = path.join(DATA_DIR, "resumes");
+fs.mkdirSync(RESUME_DIR, { recursive: true });
+app.use("/files", express.static(DATA_DIR));
+const upload = multer({
+  dest: RESUME_DIR,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
+});
 
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
@@ -221,6 +241,88 @@ app.get("/api/runs", async (_req, res) => {
     take: 50,
   });
   res.json(runs);
+});
+
+// ---------- Resume upload ----------
+app.post("/api/profile/resume", upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "No file" });
+    const profile = await getProfile();
+    if (!profile) return res.status(400).json({ error: "Save profile first" });
+    const relPath = `/files/resumes/${path.basename(req.file.path)}`;
+    await upsertProfile({ ...profile, resumeFileUrl: relPath });
+    res.json({ url: relPath, filename: req.file.originalname });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message ?? String(e) });
+  }
+});
+
+// ---------- Auto-apply ----------
+app.post("/api/jobs/:id/apply/plan", async (req, res) => {
+  try {
+    const r = await planApplication(req.params.id, {
+      withCoverLetter: !!req.body?.withCoverLetter,
+    });
+    res.json(r);
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message ?? String(e) });
+  }
+});
+
+app.get("/api/jobs/:id/apply", async (req, res) => {
+  const app = await getApplicationByJob(req.params.id);
+  res.json(app);
+});
+
+app.patch("/api/applications/:id/fields/:fieldId", async (req, res) => {
+  try {
+    const r = await updateFieldValue(req.params.id, req.params.fieldId, req.body?.value);
+    res.json(r);
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message ?? String(e) });
+  }
+});
+
+app.get("/api/applications", async (req, res) => {
+  const r = await listApplications({ status: (req.query.status as string) || undefined });
+  res.json(r);
+});
+
+app.get("/api/applications/:id", async (req, res) => {
+  const r = await prisma.application.findUnique({
+    where: { id: req.params.id },
+    include: { job: true },
+  });
+  if (!r) return res.status(404).json({ error: "not found" });
+  res.json(r);
+});
+
+app.post("/api/applications/:id/submit", async (req, res) => {
+  // Phase-2 stub. For now we mark as "submitted" but don't actually post —
+  // the submission adapters land in the next phase. This lets users track
+  // applications they've manually completed via the dry-run preview.
+  const dryRun = req.body?.dryRun !== false;
+  if (!dryRun) {
+    return res.status(501).json({
+      error: "Live submission lands in Phase 2. For now, use the dry-run preview, copy values, and submit manually on the company site.",
+    });
+  }
+  const app = await prisma.application.findUnique({ where: { id: req.params.id } });
+  if (!app) return res.status(404).json({ error: "not found" });
+  const updated = await prisma.application.update({
+    where: { id: req.params.id },
+    data: { status: "submitted", submittedAt: new Date(), dryRun: true },
+  });
+  await prisma.job.update({ where: { id: app.jobId }, data: { status: "applied" } });
+  res.json(updated);
+});
+
+app.get("/api/settings/auto-apply", async (_req, res) => {
+  res.json(await getOrCreateSettings());
+});
+
+app.put("/api/settings/auto-apply", async (req, res) => {
+  res.json(await updateSettings(req.body ?? {}));
 });
 
 const port = Number(process.env.PORT ?? 4000);
