@@ -32,9 +32,24 @@ export interface Profile {
   skills: string[];
   experience: any[];
   education: any[];
-  links?: { github?: string; linkedin?: string; portfolio?: string };
+  projects?: any[];
+  certifications?: any[];
+  languages?: any[];
+  links?: {
+    github?: string;
+    linkedin?: string;
+    portfolio?: string;
+    twitter?: string;
+    stackoverflow?: string;
+    leetcode?: string;
+    medium?: string;
+  };
   preferences?: any;
+  personal?: any;
+  workAuth?: any;
+  application?: any;
   baseResume?: string;
+  resumeFileUrl?: string;
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {

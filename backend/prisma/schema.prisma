@@ -19,9 +19,16 @@ model Profile {
   skills        String   // JSON array as string
   experience    String   // JSON
   education     String   // JSON
-  links         String?  // JSON (github, linkedin, portfolio)
-  preferences   String?  // JSON (target roles, locations, comp, remote)
+  projects      String?  // JSON [{name, description, url, stack[]}]
+  certifications String? // JSON [{name, issuer, year, url}]
+  languages     String?  // JSON [{name, proficiency}]
+  links         String?  // JSON {github, linkedin, portfolio, twitter, stackoverflow, leetcode, medium}
+  preferences   String?  // JSON (target roles, locations, comp, remote, etc.)
+  personal      String?  // JSON (DOB, gender, race, veteran, disability — for EEO forms)
+  workAuth      String?  // JSON {citizenOf, authorizedToWorkIn[], needsSponsorshipIn[], visaStatus}
+  application   String?  // JSON {noticePeriod, currentSalary, expectedSalary, availability, references, coverLetterSnippet}
   baseResume    String?  // markdown/plain text master resume
+  resumeFileUrl String?  // optional path to uploaded PDF
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }

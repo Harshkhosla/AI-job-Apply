@@ -14,9 +14,16 @@ export async function getProfile(): Promise<ProfileData | null> {
     skills: safeJSON(p.skills, []),
     experience: safeJSON(p.experience, []),
     education: safeJSON(p.education, []),
+    projects: p.projects ? safeJSON(p.projects, []) : undefined,
+    certifications: p.certifications ? safeJSON(p.certifications, []) : undefined,
+    languages: p.languages ? safeJSON(p.languages, []) : undefined,
     links: p.links ? safeJSON(p.links, {}) : undefined,
     preferences: p.preferences ? safeJSON(p.preferences, {}) : undefined,
+    personal: p.personal ? safeJSON(p.personal, {}) : undefined,
+    workAuth: p.workAuth ? safeJSON(p.workAuth, {}) : undefined,
+    application: p.application ? safeJSON(p.application, {}) : undefined,
     baseResume: p.baseResume ?? undefined,
+    resumeFileUrl: p.resumeFileUrl ?? undefined,
   };
 }
 
@@ -32,9 +39,16 @@ export async function upsertProfile(data: ProfileData): Promise<void> {
     skills: JSON.stringify(data.skills ?? []),
     experience: JSON.stringify(data.experience ?? []),
     education: JSON.stringify(data.education ?? []),
+    projects: data.projects ? JSON.stringify(data.projects) : null,
+    certifications: data.certifications ? JSON.stringify(data.certifications) : null,
+    languages: data.languages ? JSON.stringify(data.languages) : null,
     links: data.links ? JSON.stringify(data.links) : null,
     preferences: data.preferences ? JSON.stringify(data.preferences) : null,
+    personal: data.personal ? JSON.stringify(data.personal) : null,
+    workAuth: data.workAuth ? JSON.stringify(data.workAuth) : null,
+    application: data.application ? JSON.stringify(data.application) : null,
     baseResume: data.baseResume ?? null,
+    resumeFileUrl: data.resumeFileUrl ?? null,
   };
   if (existing) {
     await prisma.profile.update({ where: { id: existing.id }, data: payload });
