@@ -27,6 +27,8 @@ import {
   updateFieldValue,
   getOrCreateSettings,
   updateSettings,
+  fillLinkedInApplication,
+  closeLinkedInBrowser,
 } from "./services/applications.js";
 
 const app = express();
@@ -298,22 +300,24 @@ app.get("/api/applications/:id", async (req, res) => {
 });
 
 app.post("/api/applications/:id/submit", async (req, res) => {
-  // Phase-2 stub. For now we mark as "submitted" but don't actually post —
-  // the submission adapters land in the next phase. This lets users track
-  // applications they've manually completed via the dry-run preview.
-  const dryRun = req.body?.dryRun !== false;
-  if (!dryRun) {
-    return res.status(501).json({
-      error: "Live submission lands in Phase 2. For now, use the dry-run preview, copy values, and submit manually on the company site.",
-    });
-  }
-  const app = await prisma.application.findUnique({ where: { id: req.params.id } });
-  if (!app) return res.status(404).json({ error: "not found" });
+  // Manual-confirm flow: the bot fills, you submit on the site, then click
+  // "Mark applied" here so we update tracking + counters.
+  const application = await prisma.application.findUnique({
+    where: { id: req.params.id },
+    include: { job: true },
+  });
+  if (!application) return res.status(404).json({ error: "not found" });
   const updated = await prisma.application.update({
     where: { id: req.params.id },
     data: { status: "submitted", submittedAt: new Date(), dryRun: true },
   });
-  await prisma.job.update({ where: { id: app.jobId }, data: { status: "applied" } });
+  await prisma.job.update({ where: { id: application.jobId }, data: { status: "applied" } });
+  // Bump the daily counter so the throttle remembers we used one slot
+  const s = await getOrCreateSettings();
+  await prisma.autoApplySettings.update({
+    where: { id: s.id },
+    data: { appliedToday: s.appliedToday + 1 },
+  });
   res.json(updated);
 });
 
@@ -323,6 +327,21 @@ app.get("/api/settings/auto-apply", async (_req, res) => {
 
 app.put("/api/settings/auto-apply", async (req, res) => {
   res.json(await updateSettings(req.body ?? {}));
+});
+
+// LinkedIn: push field-plan values into the live Easy Apply modal.
+app.post("/api/applications/:id/fill-linkedin", async (req, res) => {
+  try {
+    const r = await fillLinkedInApplication(req.params.id);
+    res.json(r);
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message ?? String(e) });
+  }
+});
+
+app.post("/api/linkedin/close", async (_req, res) => {
+  await closeLinkedInBrowser();
+  res.json({ ok: true });
 });
 
 const port = Number(process.env.PORT ?? 4000);

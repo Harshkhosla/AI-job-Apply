@@ -151,4 +151,12 @@ export const api = {
   getAutoApplySettings: () => req<any>("/api/settings/auto-apply"),
   saveAutoApplySettings: (p: any) =>
     req<any>("/api/settings/auto-apply", { method: "PUT", body: JSON.stringify(p) }),
+
+  fillLinkedIn: (applicationId: string) =>
+    req<{ filled: string[]; skipped: { id: string; reason: string }[]; reviewUrl: string }>(
+      `/api/applications/${applicationId}/fill-linkedin`,
+      { method: "POST" }
+    ),
+  closeLinkedInBrowser: () =>
+    req<{ ok: boolean }>("/api/linkedin/close", { method: "POST" }),
 };

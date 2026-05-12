@@ -19,7 +19,9 @@ export default function ApplyPanel({ job }: { job: Job }) {
   const [withCover, setWithCover] = useState(false);
   const [msg, setMsg] = useState("");
 
-  const supported = ["greenhouse", "lever", "ashby"].includes(job.source);
+  const supported = ["greenhouse", "lever", "ashby", "linkedin"].includes(job.source);
+  const isLinkedIn = job.source === "linkedin";
+  const [filling, setFilling] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -66,12 +68,28 @@ export default function ApplyPanel({ job }: { job: Job }) {
     return (
       <div className="section">
         <p style={{ color: "var(--muted)" }}>
-          Auto-apply is currently supported for Greenhouse, Lever, and Ashby boards.
+          Auto-apply is currently supported for Greenhouse, Lever, Ashby, and LinkedIn (Easy Apply only).
           This job comes from <span className="tag">{job.source}</span> — open the posting
           and apply directly for now.
         </p>
       </div>
     );
+  }
+
+  async function fillBrowser() {
+    if (!appn) return;
+    setFilling(true);
+    setMsg("");
+    try {
+      const r = await api.fillLinkedIn(appn.id);
+      setMsg(
+        `Filled ${r.filled.length}/${r.filled.length + r.skipped.length} fields. Review in the browser window, then click Submit there.`
+      );
+    } catch (e: any) {
+      setMsg(`Error: ${e.message}`);
+    } finally {
+      setFilling(false);
+    }
   }
 
   const plan_ = appn?.fieldPlan ? JSON.parse(appn.fieldPlan) : null;
@@ -88,9 +106,14 @@ export default function ApplyPanel({ job }: { job: Job }) {
           <input type="checkbox" checked={withCover} onChange={(e) => setWithCover(e.target.checked)} />
           Generate cover letter
         </label>
+        {appn && isLinkedIn && (
+          <button onClick={fillBrowser} disabled={planning || filling}>
+            {filling ? "Filling browser…" : "Fill in browser"}
+          </button>
+        )}
         {appn && (
           <button onClick={submitDryRun} disabled={planning}>
-            Mark applied (dry-run)
+            Mark applied
           </button>
         )}
         {appn?.status === "submitted" && (
@@ -98,6 +121,15 @@ export default function ApplyPanel({ job }: { job: Job }) {
         )}
         {msg && <span style={{ color: "var(--muted)", fontSize: 12 }}>{msg}</span>}
       </div>
+
+      {isLinkedIn && (
+        <div className="section" style={{ borderLeft: "3px solid var(--warn)", fontSize: 12 }}>
+          <strong>LinkedIn Easy Apply (beta).</strong> A Chromium window opens with its own profile.
+          On <em>first run</em> it will land on the login page — sign in there once and the session
+          is remembered forever. The bot then fills fields and <strong>stops before Submit</strong>.
+          You review and click Submit yourself. Throttle: 1 plan / 60s, daily cap in Settings.
+        </div>
+      )}
 
       {loading && !appn ? (
         <div className="empty">Loading…</div>

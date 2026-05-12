@@ -22,6 +22,8 @@ export interface FormField {
   options?: { value: string; label: string }[];
   section?: string;      // e.g. "Education", "EEO"
   description?: string;  // help/hint text
+  /** What the form already has (browser-side fields only). */
+  currentValue?: string;
 }
 
 export interface ParsedForm {

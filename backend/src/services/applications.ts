@@ -3,6 +3,11 @@ import { parseForm } from "../apply/parsers/index.js";
 import { buildFieldPlan } from "../apply/fieldMapper.js";
 import { getProfile } from "./profile.js";
 import { generateCoverLetter } from "../llm/claude.js";
+import {
+  openLinkedInJob,
+  fillLinkedInForm,
+  closeBrowser,
+} from "../apply/playwright/linkedin.js";
 import type { NormalizedJob } from "../types.js";
 
 function toNormalized(j: any): NormalizedJob {
@@ -26,16 +31,50 @@ function toNormalized(j: any): NormalizedJob {
  *   3. optionally generate a cover letter
  * Result is stored on the Application row and returned.
  */
+// Throttle for LinkedIn: ensure at least N seconds between plans.
+let _lastLinkedInPlanAt = 0;
+const LINKEDIN_THROTTLE_MS = 60_000;
+
 export async function planApplication(jobId: string, opts: { withCoverLetter?: boolean } = {}) {
   const job = await prisma.job.findUnique({ where: { id: jobId } });
   if (!job) throw new Error("Job not found");
   const profile = await getProfile();
   if (!profile) throw new Error("Profile not set");
-  if (!["greenhouse", "lever", "ashby"].includes(job.source)) {
+  if (!["greenhouse", "lever", "ashby", "linkedin"].includes(job.source)) {
     throw new Error(`Auto-apply is not supported for ${job.source} yet.`);
   }
 
-  const form = await parseForm(job.source, job.url);
+  // Enforce daily cap + throttle for LinkedIn specifically (highest ban risk).
+  if (job.source === "linkedin") {
+    const s = await getOrCreateSettings();
+    if (s.appliedToday >= s.dailyCap) {
+      throw new Error(
+        `Daily cap reached (${s.appliedToday}/${s.dailyCap}). Raise the cap in Settings or wait until tomorrow.`
+      );
+    }
+    const wait = LINKEDIN_THROTTLE_MS - (Date.now() - _lastLinkedInPlanAt);
+    if (wait > 0) {
+      throw new Error(
+        `Slow down — please wait ${Math.ceil(wait / 1000)}s before planning another LinkedIn application.`
+      );
+    }
+    _lastLinkedInPlanAt = Date.now();
+  }
+
+  // We need the application row early for LinkedIn so the Playwright session
+  // can be keyed by applicationId. Create/upsert a stub draft first.
+  const existingDraft = await prisma.application.findFirst({
+    where: { jobId, status: { in: ["draft", "preview"] } },
+    orderBy: { createdAt: "desc" },
+  });
+  const draft =
+    existingDraft ??
+    (await prisma.application.create({ data: { jobId, status: "draft" } }));
+
+  const form =
+    job.source === "linkedin"
+      ? await openLinkedInJob(job.url, draft.id)
+      : await parseForm(job.source, job.url);
   const plan = await buildFieldPlan(form, profile, {
     jobTitle: job.title,
     jobCompany: job.company,
@@ -54,13 +93,8 @@ export async function planApplication(jobId: string, opts: { withCoverLetter?: b
     }
   }
 
-  // Upsert: one draft per job (re-planning replaces the previous draft).
-  const existing = await prisma.application.findFirst({
-    where: { jobId, status: { in: ["draft", "preview"] } },
-    orderBy: { createdAt: "desc" },
-  });
+  // Update the draft row we created above with the parsed form + plan.
   const data = {
-    jobId,
     status: "preview" as const,
     formSchema: JSON.stringify(form),
     fieldPlan: JSON.stringify(plan),
@@ -68,10 +102,43 @@ export async function planApplication(jobId: string, opts: { withCoverLetter?: b
     resumeUsed: profile.resumeFileUrl ?? null,
     dryRun: true,
   };
-  if (existing) {
-    return prisma.application.update({ where: { id: existing.id }, data });
+  return prisma.application.update({ where: { id: draft.id }, data });
+}
+
+/**
+ * Push the current field-plan values into the live LinkedIn modal so the user
+ * can review and click "Submit application" themselves.
+ * No-op (and throws) for non-LinkedIn sources.
+ */
+export async function fillLinkedInApplication(applicationId: string) {
+  const app = await prisma.application.findUnique({
+    where: { id: applicationId },
+    include: { job: true },
+  });
+  if (!app) throw new Error("Application not found");
+  if (app.job.source !== "linkedin") {
+    throw new Error("Browser-fill is only supported for LinkedIn jobs.");
   }
-  return prisma.application.create({ data });
+  if (!app.fieldPlan) throw new Error("Plan the application first.");
+  const plan = JSON.parse(app.fieldPlan);
+  const profile = await getProfile();
+  const result = await fillLinkedInForm(
+    applicationId,
+    plan.fields,
+    profile ?? undefined,
+    profile
+      ? {
+          jobTitle: app.job.title,
+          jobCompany: app.job.company,
+          jobDescription: app.job.description ?? "",
+        }
+      : undefined
+  );
+  return result;
+}
+
+export async function closeLinkedInBrowser() {
+  await closeBrowser();
 }
 
 export async function getApplicationByJob(jobId: string) {

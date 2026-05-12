@@ -192,7 +192,12 @@ export async function answerFormField(req: AnswerFieldRequest): Promise<AnswerFi
     "(3) For yes/no questions about work authorization, sponsorship, relocation, return the candidate's stated preference if known. " +
     "(4) For salary, only answer if the profile has expected/min salary; otherwise return null. " +
     "(5) For 'why this company?' / cover-letter-ish fields, write 2-4 sentences personalized to the company using the candidate's actual experience. " +
-    "(6) For EEO/voluntary disclosure, return null unless explicitly present in profile.personal.";
+    "(6) For EEO/voluntary disclosure, return null unless explicitly present in profile.personal. " +
+    "(7) For NUMBER fields (type=number, or label like 'how many years…', or description mentions 'decimal' / 'whole number'): " +
+    "return a plain number (e.g. 4 or 3.5), NOT a string like '3+' or '4 years'. " +
+    "If profile has yearsExperience and the question is about general experience, use that. " +
+    "If the question is about a specific technology, estimate based on the profile's experience bullets, but never exceed the candidate's total years. " +
+    "(8) If the form provided a VALIDATION ERROR in the description, respect its constraint exactly (e.g. 'whole number 0-99' = integer, 'decimal larger than 0' = positive non-zero decimal).";
   const user = `FIELD:
 id: ${req.field.id}
 label: ${req.field.label}
