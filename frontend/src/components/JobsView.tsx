@@ -135,6 +135,18 @@ export default function JobsView() {
         <button onClick={() => scoreCurrentPage(false)} disabled={!!scoring || jobs.length === 0}>
           Re-score page
         </button>
+        <button
+          onClick={async () => {
+            if (!confirm("Clear all scores? You'll need to re-score jobs after this.")) return;
+            const r = await api.resetScores();
+            alert(`Cleared scores on ${r.cleared} jobs.`);
+            await load(page);
+          }}
+          disabled={!!scoring}
+          title="Wipe all existing scores (after profile / preferences update)"
+        >
+          Clear scores
+        </button>
         <span style={{ color: "var(--muted)", fontSize: 12, marginLeft: "auto" }}>
           {total} jobs · page {page}/{totalPages}
         </span>

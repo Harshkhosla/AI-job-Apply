@@ -60,6 +60,8 @@ export const api = {
   getJob: (id: string) => req<Job>(`/api/jobs/${id}`),
   updateJob: (id: string, body: Partial<{ status: string; notes: string }>) =>
     req<Job>(`/api/jobs/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  resetScores: () =>
+    req<{ cleared: number }>("/api/jobs/reset-scores", { method: "POST" }),
   ingest: (body: { source: string; query: string; location?: string; pages?: number }) =>
     req<{ inserted: number; total: number }>("/api/ingest", {
       method: "POST",

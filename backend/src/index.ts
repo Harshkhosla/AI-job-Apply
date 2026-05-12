@@ -140,6 +140,14 @@ app.patch("/api/jobs/:id", async (req, res) => {
   res.json(job);
 });
 
+// Wipe scores so they can be regenerated with a newer rubric / updated profile.
+app.post("/api/jobs/reset-scores", async (_req, res) => {
+  const r = await prisma.job.updateMany({
+    data: { score: null, scoreReason: null },
+  });
+  res.json({ cleared: r.count });
+});
+
 // ---------- Ingestion ----------
 app.post("/api/ingest", async (req, res) => {
   try {
