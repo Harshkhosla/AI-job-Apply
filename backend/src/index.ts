@@ -85,7 +85,12 @@ app.get("/api/jobs", async (req, res) => {
   } = req.query as Record<string, string>;
   const where: any = {};
   if (easyApply === "1" || easyApply === "true") where.easyApply = true;
-  if (status) where.status = status;
+  if (status) {
+    where.status = status;
+  } else {
+    // By default, hide jobs you've already acted on (applied/rejected/hidden).
+    where.status = { notIn: ["applied", "rejected", "hidden"] };
+  }
   if (source) where.source = source;
   if (minScore) where.score = { gte: Number(minScore) };
   if (q) {
@@ -359,7 +364,8 @@ app.post("/api/batch", async (req, res) => {
     const ids: string[] = req.body?.jobIds ?? [];
     if (!Array.isArray(ids) || ids.length === 0)
       return res.status(400).json({ error: "jobIds required" });
-    const s = await startBatch(ids);
+    const autoAdvanceSeconds = Number(req.body?.autoAdvanceSeconds) || undefined;
+    const s = await startBatch(ids, { autoAdvanceSeconds });
     res.json(s);
   } catch (e: any) {
     res.status(500).json({ error: e?.message ?? String(e) });

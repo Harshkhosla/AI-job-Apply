@@ -476,55 +476,79 @@ export async function fillLinkedInForm(
     await clickModalButton(frame, nextInfo);
     await page.waitForTimeout(1500);
 
-    // Did LinkedIn actually advance? If the same fields are still showing
-    // there's likely an inline validation error.
-    const afterFields = await extractFieldsFromModal(page);
-    const afterIds = afterFields.map((f) => f.id).join("|");
-    if (afterIds === beforeIds && afterFields.length > 0) {
-      console.log("[linkedin] step didn't advance — checking inline errors...");
-      const errors = await collectInlineErrors(frame);
-      console.log(`[linkedin] inline errors:`, errors);
-      if (errors.length > 0 && profile && context) {
-        // Try to fix each errored field via Claude with the constraint hint.
-        let fixed = 0;
-        for (const err of errors) {
-          // Find the field this error belongs to.
-          const target = afterFields.find(
-            (f) =>
-              f.id === err.forId ||
-              (err.label && f.label.toLowerCase() === err.label.toLowerCase())
-          );
-          if (!target) {
-            console.log(`[linkedin]   unable to map error to field: ${JSON.stringify(err)}`);
-            continue;
-          }
-          try {
-            const enrichedField = { ...target, description: `${target.description ?? ""}\nVALIDATION ERROR: ${err.message}. Re-answer with a valid value.`.trim() };
-            console.log(`[linkedin]   asking Claude (with error context) for "${target.label}"...`);
-            const ans = await answerFormField({ field: enrichedField, profile, context });
-            console.log(`[linkedin]   Claude re-answered: ${JSON.stringify(ans.value)} (conf=${ans.confidence})`);
-            if (ans.value !== null && ans.value !== "" && ans.value !== undefined) {
-              _qaCache.set(qaKey(context.jobCompany, target.label), ans.value);
-              const ok = await fillFieldByLabel(page, target.id, target.label, ans.value);
-              console.log(`[linkedin]   re-fill returned ${ok}`);
-              if (ok) fixed++;
-            }
-          } catch (e: any) {
-            console.log(`[linkedin]   Claude error: ${e?.message ?? e}`);
-          }
-        }
-        if (fixed > 0) {
-          console.log(`[linkedin] fixed ${fixed} field(s); clicking Next again`);
-          await clickModalButton(frame, nextInfo);
-          await page.waitForTimeout(1500);
-        } else {
-          console.log("[linkedin] couldn't fix errors — stopping for manual review");
-          break;
-        }
-      } else {
-        console.log("[linkedin] no inline errors detected — bailing");
+    // Retry the same step up to 3 times if LinkedIn refuses to advance.
+    let retries = 0;
+    while (retries < 3) {
+      const afterFields = await extractFieldsFromModal(page);
+      const afterIds = afterFields.map((f) => f.id).join("|");
+      if (afterIds !== beforeIds || afterFields.length === 0) {
+        // We advanced — exit retry loop and let outer loop pick up new step.
         break;
       }
+      console.log(`[linkedin] step didn't advance (retry ${retries + 1}/3) — checking inline errors...`);
+      const errors = await collectInlineErrors(frame);
+      console.log(`[linkedin] inline errors:`, errors);
+      if (errors.length === 0 || !profile || !context) {
+        console.log("[linkedin] no fixable errors — stopping");
+        return { filled, skipped, reviewUrl: page.url() };
+      }
+      let fixedThisRound = 0;
+      for (const err of errors) {
+        // Find the field this error belongs to.
+        let target = afterFields.find(
+          (f) =>
+            f.id === err.forId ||
+            (err.label && f.label.toLowerCase() === err.label.toLowerCase())
+        );
+        // Also try matching by error label fuzzy match against field labels.
+        if (!target && err.label) {
+          target = afterFields.find((f) =>
+            f.label.toLowerCase().includes(err.label!.toLowerCase()) ||
+            err.label!.toLowerCase().includes(f.label.toLowerCase())
+          );
+        }
+        if (!target) {
+          console.log(`[linkedin]   unable to map error to field: ${JSON.stringify(err)}`);
+          continue;
+        }
+        try {
+          // Beef up the description so Claude returns a value that ACTUALLY satisfies the constraint.
+          const enrichedField = {
+            ...target,
+            description: `${target.description ?? ""}\nVALIDATION ERROR FROM FORM: "${err.message}". The previous answer was rejected. Return a NEW value that satisfies this exact constraint. If the constraint says "decimal larger than 0.0" you MUST return a non-zero positive number like 1, 2, or 3. If "whole number 0-99" return an integer. If a dropdown says "Please enter a valid answer", pick the most reasonable option from the OPTIONS list.`.trim(),
+          };
+          console.log(`[linkedin]   asking Claude (retry ${retries + 1}) for "${target.label}" (err: ${err.message})...`);
+          const ans = await answerFormField({ field: enrichedField, profile, context });
+          console.log(`[linkedin]   Claude re-answered: ${JSON.stringify(ans.value)} (conf=${ans.confidence})`);
+          let valueToUse = ans.value;
+          // Last-ditch sanity fix: if constraint demands > 0 and Claude returned 0/null, force 1.
+          if (
+            (valueToUse === null || valueToUse === 0 || valueToUse === "0" || valueToUse === "" || valueToUse === undefined) &&
+            /larger than 0|greater than 0|more than 0|> 0/i.test(err.message)
+          ) {
+            valueToUse = 1;
+            console.log(`[linkedin]   Claude returned empty/0 for ">0" constraint — forcing 1`);
+          }
+          if (valueToUse === null || valueToUse === undefined || valueToUse === "") {
+            console.log(`[linkedin]   still no value — leaving as-is`);
+            continue;
+          }
+          _qaCache.set(qaKey(context.jobCompany, target.label), valueToUse);
+          const ok = await fillFieldByLabel(page, target.id, target.label, valueToUse);
+          console.log(`[linkedin]   re-fill returned ${ok}`);
+          if (ok) fixedThisRound++;
+        } catch (e: any) {
+          console.log(`[linkedin]   Claude error: ${e?.message ?? e}`);
+        }
+      }
+      if (fixedThisRound === 0) {
+        console.log("[linkedin] no fields fixed this round — stopping");
+        return { filled, skipped, reviewUrl: page.url() };
+      }
+      console.log(`[linkedin] fixed ${fixedThisRound} field(s); clicking Next again`);
+      await clickModalButton(frame, nextInfo);
+      await page.waitForTimeout(1500);
+      retries++;
     }
   }
 
@@ -555,7 +579,13 @@ const EXTRACT_FIELDS_SCRIPT = `
     var tag = el.tagName;
     if (tag === "SELECT") {
       var sel = el.options[el.selectedIndex];
-      return sel ? sel.value : "";
+      if (!sel) return "";
+      var v = sel.value || "";
+      var t = (sel.text || "").toLowerCase().trim();
+      // Treat empty value or "Select an option" placeholder as empty so the
+      // bot fills it.
+      if (!v || t === "" || t.indexOf("select an option") >= 0 || t.indexOf("select...") >= 0) return "";
+      return v;
     }
     if (tag === "INPUT") {
       var t = (el.type || "").toLowerCase();
@@ -750,19 +780,33 @@ const FILL_FIELD_SCRIPT = `
     if (!el) return false;
     var tag = el.tagName;
     if (tag === "SELECT") {
+      var vStr = String(val).toLowerCase().trim();
+      if (!vStr) return false;
       var match = null;
-      for (var i = 0; i < el.options.length; i++) {
-        var o = el.options[i];
-        if (String(o.value) === String(val) || String(o.text) === String(val) || o.text.toLowerCase().indexOf(String(val).toLowerCase()) >= 0) {
-          match = o.value; break;
+      // Two passes: exact match first (more reliable), then fuzzy contains.
+      for (var p = 0; p < 2; p++) {
+        for (var i = 0; i < el.options.length; i++) {
+          var o = el.options[i];
+          var oVal = String(o.value || "").toLowerCase().trim();
+          var oTxt = String(o.text || "").toLowerCase().trim();
+          // Skip placeholder options (empty value or "Select an option" text).
+          if (oVal === "" || oTxt === "" || oTxt.indexOf("select an option") >= 0 || oTxt.indexOf("select...") >= 0) continue;
+          var hit = p === 0
+            ? (oVal === vStr || oTxt === vStr)
+            : (oVal.indexOf(vStr) >= 0 || oTxt.indexOf(vStr) >= 0 || vStr.indexOf(oTxt) >= 0);
+          if (hit) { match = o.value; break; }
         }
+        if (match !== null) break;
       }
-      if (match !== null) {
-        el.value = match;
-        el.dispatchEvent(new Event("change", { bubbles: true }));
-        return true;
-      }
-      return false;
+      if (match === null) return false;
+      // Use React's native setter so LinkedIn's React picks the change up.
+      var proto = HTMLSelectElement.prototype;
+      var desc = Object.getOwnPropertyDescriptor(proto, "value");
+      if (desc && desc.set) { desc.set.call(el, match); } else { el.value = match; }
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      el.dispatchEvent(new Event("blur", { bubbles: true }));
+      return true;
     }
     if (tag === "INPUT") {
       var type = (el.type || "").toLowerCase();

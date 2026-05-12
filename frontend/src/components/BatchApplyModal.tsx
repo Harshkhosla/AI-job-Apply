@@ -10,6 +10,8 @@ export default function BatchApplyModal({ jobs, onClose }: Props) {
   const [batch, setBatch] = useState<any | null>(null);
   const [starting, setStarting] = useState(false);
   const [err, setErr] = useState("");
+  const [autoSeconds, setAutoSeconds] = useState<number>(0);
+  const [now, setNow] = useState(Date.now());
   const pollRef = useRef<number | null>(null);
 
   // Map jobId → title/company for display
@@ -19,7 +21,7 @@ export default function BatchApplyModal({ jobs, onClose }: Props) {
     setStarting(true);
     setErr("");
     try {
-      const s = await api.startBatch(jobs.map((j) => j.id));
+      const s = await api.startBatch(jobs.map((j) => j.id), autoSeconds || undefined);
       setBatch(s);
     } catch (e: any) {
       setErr(e.message);
@@ -27,6 +29,12 @@ export default function BatchApplyModal({ jobs, onClose }: Props) {
       setStarting(false);
     }
   }
+
+  // Ticking clock for the countdown display
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), 500);
+    return () => window.clearInterval(t);
+  }, []);
 
   // Poll the batch status while running
   useEffect(() => {
@@ -119,6 +127,21 @@ export default function BatchApplyModal({ jobs, onClose }: Props) {
                 </li>
               ))}
             </ul>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+              <label style={{ fontSize: 12, color: "var(--muted)" }}>Auto-advance after:</label>
+              <select value={autoSeconds} onChange={(e) => setAutoSeconds(Number(e.target.value))}>
+                <option value={0}>Wait for me (no timer)</option>
+                <option value={30}>30 seconds</option>
+                <option value={60}>60 seconds</option>
+                <option value={120}>2 minutes</option>
+                <option value={180}>3 minutes</option>
+              </select>
+              {autoSeconds > 0 && (
+                <span style={{ fontSize: 11, color: "var(--warn)" }}>
+                  ⚠ Bot will move to next job even if you haven't clicked Submit
+                </span>
+              )}
+            </div>
             <button className="primary" disabled={starting} onClick={start}>
               {starting ? "Starting..." : "Start batch"}
             </button>
@@ -184,6 +207,13 @@ export default function BatchApplyModal({ jobs, onClose }: Props) {
                 <strong>Your turn.</strong> Review the Chromium window, click{" "}
                 <strong>Submit application</strong>, then press the button below to move to the next
                 job. The bot will <strong>not</strong> auto-click Submit.
+                {batch.autoAdvanceAt && (
+                  <div style={{ marginTop: 6, fontSize: 12, color: "var(--warn)" }}>
+                    Auto-advancing in{" "}
+                    <strong>{Math.max(0, Math.ceil((batch.autoAdvanceAt - now) / 1000))}s</strong>{" "}
+                    — click below to advance now.
+                  </div>
+                )}
                 <div style={{ marginTop: 8 }}>
                   <button className="primary" onClick={advance}>
                     I submitted — next job →

@@ -162,8 +162,11 @@ export const api = {
     req<{ ok: boolean }>("/api/linkedin/close", { method: "POST" }),
 
   // Batch apply
-  startBatch: (jobIds: string[]) =>
-    req<any>("/api/batch", { method: "POST", body: JSON.stringify({ jobIds }) }),
+  startBatch: (jobIds: string[], autoAdvanceSeconds?: number) =>
+    req<any>("/api/batch", {
+      method: "POST",
+      body: JSON.stringify({ jobIds, autoAdvanceSeconds }),
+    }),
   getBatch: (id: string) => req<any>(`/api/batch/${id}`),
   nextBatch: (id: string) => req<{ ok: boolean }>(`/api/batch/${id}/next`, { method: "POST" }),
   cancelBatch: (id: string) =>

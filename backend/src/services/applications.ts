@@ -41,6 +41,9 @@ export async function planApplication(
 ) {
   const job = await prisma.job.findUnique({ where: { id: jobId } });
   if (!job) throw new Error("Job not found");
+  if (job.status === "applied") {
+    throw new Error("This job is already marked as applied. Change its status to re-plan.");
+  }
   const profile = await getProfile();
   if (!profile) throw new Error("Profile not set");
   if (!["greenhouse", "lever", "ashby", "linkedin"].includes(job.source)) {

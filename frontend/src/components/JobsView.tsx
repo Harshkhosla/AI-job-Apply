@@ -83,7 +83,7 @@ export default function JobsView() {
           style={{ minWidth: 220 }}
         />
         <select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}>
-          <option value="">All statuses</option>
+          <option value="">Active (default)</option>
           <option value="new">New</option>
           <option value="shortlisted">Shortlisted</option>
           <option value="applied">Applied</option>

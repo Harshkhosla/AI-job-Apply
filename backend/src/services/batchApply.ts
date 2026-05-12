@@ -32,6 +32,10 @@ export interface BatchSession {
   status: "running" | "paused" | "done" | "cancelled";
   startedAt: Date;
   endedAt?: Date;
+  /** If set, the loop auto-advances after this many seconds of waiting. */
+  autoAdvanceSeconds?: number;
+  /** Epoch ms when the auto-advance will fire for the current job (UI display). */
+  autoAdvanceAt?: number;
 }
 
 const _sessions = new Map<string, BatchSession>();
@@ -70,7 +74,10 @@ export function proceedBatch(id: string): boolean {
   return true;
 }
 
-export async function startBatch(jobIds: string[]): Promise<BatchSession> {
+export async function startBatch(
+  jobIds: string[],
+  opts: { autoAdvanceSeconds?: number } = {}
+): Promise<BatchSession> {
   if (jobIds.length === 0) throw new Error("No jobs in batch");
   if (jobIds.length > 10) throw new Error("Max 10 jobs per batch");
 
@@ -81,6 +88,10 @@ export async function startBatch(jobIds: string[]): Promise<BatchSession> {
     currentIndex: -1,
     status: "running",
     startedAt: new Date(),
+    autoAdvanceSeconds:
+      opts.autoAdvanceSeconds && opts.autoAdvanceSeconds > 0
+        ? opts.autoAdvanceSeconds
+        : undefined,
   };
   _sessions.set(id, session);
 
@@ -101,6 +112,15 @@ async function runBatchLoop(session: BatchSession) {
     const state = session.jobs[i];
 
     try {
+      // Already-applied jobs are a no-op.
+      const existingJob = await prisma.job.findUnique({ where: { id: state.jobId } });
+      if (existingJob && existingJob.status === "applied") {
+        state.phase = "skipped";
+        state.message = "Already applied — skipping.";
+        console.log(`[batch ${session.id}] (${i + 1}/${session.jobs.length}) skip already-applied ${state.jobId}`);
+        continue;
+      }
+
       // If we're past the first job, surface a "waiting between jobs" phase
       // so the UI shows what's happening during the LinkedIn throttle.
       if (i > 0) {
@@ -119,14 +139,36 @@ async function runBatchLoop(session: BatchSession) {
       state.skipped = result.skipped.length;
 
       state.phase = "awaiting_user_submit";
-      state.message = `Filled ${state.filled}, skipped ${state.skipped}. Review the Chromium window and click Submit, then press "Next" in the batch panel.`;
-      console.log(`[batch ${session.id}] awaiting user submit + advance`);
+      const auto = session.autoAdvanceSeconds;
+      state.message = auto
+        ? `Filled ${state.filled}, skipped ${state.skipped}. Auto-advancing in ${auto}s — click Submit in the browser, or press "Next" / "Cancel" here to override.`
+        : `Filled ${state.filled}, skipped ${state.skipped}. Review the Chromium window and click Submit, then press "Next" in the batch panel.`;
+      console.log(`[batch ${session.id}] awaiting user submit (auto-advance: ${auto ?? "off"}s)`);
 
-      // Park until the user clicks "Next" in the UI (or cancels).
+      // Park until the user clicks "Next" OR the auto-advance timer fires.
       session.status = "paused";
+      session.autoAdvanceAt = auto ? Date.now() + auto * 1000 : undefined;
+
       await new Promise<void>((resolve) => {
         _proceedResolvers.set(session.id, resolve);
+        if (auto) {
+          const timer = setTimeout(() => {
+            // Only auto-advance if the resolver is still ours (not cancelled).
+            if (_proceedResolvers.get(session.id) === resolve) {
+              console.log(`[batch ${session.id}] auto-advance timer fired after ${auto}s`);
+              _proceedResolvers.delete(session.id);
+              resolve();
+            }
+          }, auto * 1000);
+          // Best-effort: clear if cancelled or user clicks next first
+          const origResolve = resolve;
+          _proceedResolvers.set(session.id, () => {
+            clearTimeout(timer);
+            origResolve();
+          });
+        }
       });
+      session.autoAdvanceAt = undefined;
       if ((session.status as string) === "cancelled") break;
       session.status = "running";
 
