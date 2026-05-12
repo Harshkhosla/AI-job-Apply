@@ -101,9 +101,15 @@ async function runBatchLoop(session: BatchSession) {
     const state = session.jobs[i];
 
     try {
+      // If we're past the first job, surface a "waiting between jobs" phase
+      // so the UI shows what's happening during the LinkedIn throttle.
+      if (i > 0) {
+        state.phase = "queued";
+        state.message = "Waiting for LinkedIn throttle window before next plan...";
+      }
       state.phase = "planning";
       console.log(`[batch ${session.id}] (${i + 1}/${session.jobs.length}) planning job ${state.jobId}`);
-      const app = await planApplication(state.jobId);
+      const app = await planApplication(state.jobId, { waitForThrottle: true });
       state.applicationId = app.id;
 
       state.phase = "filling";

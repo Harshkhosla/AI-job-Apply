@@ -35,7 +35,10 @@ function toNormalized(j: any): NormalizedJob {
 let _lastLinkedInPlanAt = 0;
 const LINKEDIN_THROTTLE_MS = 60_000;
 
-export async function planApplication(jobId: string, opts: { withCoverLetter?: boolean } = {}) {
+export async function planApplication(
+  jobId: string,
+  opts: { withCoverLetter?: boolean; waitForThrottle?: boolean } = {}
+) {
   const job = await prisma.job.findUnique({ where: { id: jobId } });
   if (!job) throw new Error("Job not found");
   const profile = await getProfile();
@@ -54,9 +57,14 @@ export async function planApplication(jobId: string, opts: { withCoverLetter?: b
     }
     const wait = LINKEDIN_THROTTLE_MS - (Date.now() - _lastLinkedInPlanAt);
     if (wait > 0) {
-      throw new Error(
-        `Slow down — please wait ${Math.ceil(wait / 1000)}s before planning another LinkedIn application.`
-      );
+      if (opts.waitForThrottle) {
+        console.log(`[linkedin] throttle: sleeping ${Math.ceil(wait / 1000)}s before next plan`);
+        await new Promise((r) => setTimeout(r, wait));
+      } else {
+        throw new Error(
+          `Slow down — please wait ${Math.ceil(wait / 1000)}s before planning another LinkedIn application.`
+        );
+      }
     }
     _lastLinkedInPlanAt = Date.now();
   }

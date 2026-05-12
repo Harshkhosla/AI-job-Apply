@@ -288,6 +288,44 @@ export async function fillLinkedInForm(
     console.log("");
     console.log(`[linkedin] -- step ${step + 1}: extracted ${stepFields.length} fields --`);
 
+    // Detect a Resume-picker step. LinkedIn always pre-selects a default
+    // resume here, so we should NOT touch it — just verify a radio is
+    // already checked, then click Next.
+    const ctxFrame: any = (page as any)._modalFrame ?? page;
+    const isResumeStep = await ctxFrame
+      .evaluate(
+        `(function(){
+          var root = document.querySelector("div.jobs-easy-apply-content")
+            || document.querySelector("div.jobs-easy-apply-modal")
+            || document.querySelector("div[data-test-modal]")
+            || document.querySelector("div.artdeco-modal")
+            || document.querySelector("div[role='dialog']")
+            || document.querySelector("dialog");
+          if (!root) return { is: false, reason: "no root" };
+          var bodyText = (root.innerText || '').toLowerCase();
+
+          // Strong signals — any of these = resume step.
+          var headings = root.querySelectorAll('h1, h2, h3, h4');
+          for (var i = 0; i < headings.length; i++) {
+            var ht = (headings[i].innerText || '').toLowerCase();
+            if (ht === 'resume' || ht.indexOf('resume') === 0) return { is: true, reason: "heading: " + ht };
+          }
+          if (bodyText.indexOf('upload resume') >= 0) return { is: true, reason: "upload resume button" };
+          if (bodyText.indexOf('be sure to include an updated resume') >= 0) return { is: true, reason: "resume copy" };
+          if (/\\.pdf\\b/.test(bodyText)) return { is: true, reason: "PDF chip visible" };
+          if (/\\.docx?\\b/.test(bodyText)) return { is: true, reason: "DOC chip visible" };
+
+          return { is: false, reason: "no signals" };
+        })();` as any
+      )
+      .catch(() => ({ is: false, reason: "evaluate threw" })) as any;
+
+    console.log(`[linkedin] resume-step check: ${JSON.stringify(isResumeStep)}`);
+    if (isResumeStep && isResumeStep.is) {
+      console.log("[linkedin] resume step — keeping LinkedIn's default selection, going straight to Next");
+      stepFields.length = 0;
+    }
+
     for (const f of stepFields) {
       const cur = f.currentValue ? String(f.currentValue).trim() : "";
       console.log(
