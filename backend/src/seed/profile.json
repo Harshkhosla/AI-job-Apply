@@ -1,0 +1,51 @@
+{
+  "name": "Your Name",
+  "email": "you@example.com",
+  "phone": "+1-555-555-5555",
+  "location": "San Francisco, CA",
+  "headline": "Senior Software Engineer | Distributed Systems & AI",
+  "summary": "Engineer with 6+ years building scalable backend systems and AI-powered products.",
+  "skills": [
+    "TypeScript", "Node.js", "React", "Python", "PostgreSQL",
+    "AWS", "Docker", "Kubernetes", "GraphQL", "LLMs", "System Design"
+  ],
+  "experience": [
+    {
+      "company": "Acme Corp",
+      "title": "Senior Software Engineer",
+      "start": "2022-01",
+      "end": "Present",
+      "bullets": [
+        "Led migration of monolith to event-driven microservices, cutting p99 latency by 40%.",
+        "Built LLM-powered support assistant handling 30% of tickets autonomously.",
+        "Mentored 4 engineers; ran weekly system design reviews."
+      ]
+    },
+    {
+      "company": "Beta Labs",
+      "title": "Software Engineer",
+      "start": "2019-06",
+      "end": "2021-12",
+      "bullets": [
+        "Shipped React + Node billing platform processing $50M ARR.",
+        "Designed multi-tenant Postgres schema with row-level security."
+      ]
+    }
+  ],
+  "education": [
+    { "school": "State University", "degree": "B.S. Computer Science", "start": "2015", "end": "2019" }
+  ],
+  "links": {
+    "github": "https://github.com/yourhandle",
+    "linkedin": "https://www.linkedin.com/in/yourhandle",
+    "portfolio": "https://yoursite.dev"
+  },
+  "preferences": {
+    "targetRoles": ["Senior Software Engineer", "Staff Engineer", "Backend Engineer"],
+    "locations": ["Remote", "San Francisco", "New York"],
+    "remoteOk": true,
+    "minSalary": 180000,
+    "currency": "USD"
+  },
+  "baseResume": "# Your Name\n\nSenior Software Engineer focused on distributed systems and AI.\n\n## Experience\n- Acme Corp — Senior Software Engineer (2022–Present)\n- Beta Labs — Software Engineer (2019–2021)\n\n## Skills\nTypeScript, Node.js, React, Python, PostgreSQL, AWS, LLMs.\n"
+}

@@ -1,0 +1,216 @@
+import { useEffect, useState } from "react";
+import { api, type Job } from "../api";
+import JobDetail from "./JobDetail";
+
+export default function JobsView() {
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [pageSize] = useState(25);
+  const [selected, setSelected] = useState<Job | null>(null);
+  const [filters, setFilters] = useState({
+    status: "",
+    source: "",
+    minScore: "",
+    q: "",
+    sort: "score",
+    hours: "",
+    fit: "",
+  });
+  const [loading, setLoading] = useState(false);
+  const [scoring, setScoring] = useState<null | { done: number; total: number; failed: number }>(null);
+
+  async function load(targetPage = page) {
+    setLoading(true);
+    try {
+      const params: Record<string, string> = { page: String(targetPage), pageSize: String(pageSize) };
+      for (const [k, v] of Object.entries(filters)) if (v) params[k] = v;
+      const data = await api.listJobs(params);
+      setJobs(data.jobs);
+      setTotal(data.total);
+      setPage(data.page);
+      if (selected) {
+        const updated = data.jobs.find((j) => j.id === selected.id);
+        if (updated) setSelected(updated);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Reset to page 1 whenever filters change
+  useEffect(() => {
+    setPage(1);
+    load(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters]);
+
+  // Score each job on the *current page* sequentially so you get progress feedback.
+  async function scoreCurrentPage(onlyUnscored: boolean) {
+    const targets = onlyUnscored ? jobs.filter((j) => j.score == null) : jobs;
+    if (targets.length === 0) return;
+    setScoring({ done: 0, total: targets.length, failed: 0 });
+    let done = 0;
+    let failed = 0;
+    for (const job of targets) {
+      try {
+        await api.score(job.id);
+      } catch {
+        failed++;
+      }
+      done++;
+      setScoring({ done, total: targets.length, failed });
+      if (done % 3 === 0) await load(page);
+    }
+    setScoring(null);
+    await load(page);
+  }
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const unscoredOnPage = jobs.filter((j) => j.score == null).length;
+
+  return (
+    <>
+      <div className="toolbar">
+        <input
+          placeholder="Search title / company / desc…"
+          value={filters.q}
+          onChange={(e) => setFilters({ ...filters, q: e.target.value })}
+          style={{ minWidth: 220 }}
+        />
+        <select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}>
+          <option value="">All statuses</option>
+          <option value="new">New</option>
+          <option value="shortlisted">Shortlisted</option>
+          <option value="applied">Applied</option>
+          <option value="rejected">Rejected</option>
+          <option value="hidden">Hidden</option>
+        </select>
+        <select value={filters.source} onChange={(e) => setFilters({ ...filters, source: e.target.value })}>
+          <option value="">All sources</option>
+          <option value="greenhouse">Greenhouse</option>
+          <option value="lever">Lever</option>
+          <option value="ashby">Ashby</option>
+          <option value="linkedin">LinkedIn</option>
+          <option value="indeed">Indeed</option>
+        </select>
+        <select value={filters.minScore} onChange={(e) => setFilters({ ...filters, minScore: e.target.value })}>
+          <option value="">Any score</option>
+          <option value="60">≥ 60</option>
+          <option value="75">≥ 75</option>
+          <option value="85">≥ 85</option>
+        </select>
+        <button
+          className={filters.fit ? "primary" : ""}
+          onClick={() => setFilters({ ...filters, fit: filters.fit ? "" : "me" })}
+          title="Show only roles matching your stack and seniority"
+        >
+          {filters.fit ? "✓ Best for me" : "Best for me"}
+        </button>
+        <select value={filters.hours} onChange={(e) => setFilters({ ...filters, hours: e.target.value })}>
+          <option value="">Any time</option>
+          <option value="24">Last 24h</option>
+          <option value="48">Last 48h</option>
+          <option value="168">Last 7d</option>
+          <option value="720">Last 30d</option>
+        </select>
+        <select value={filters.sort} onChange={(e) => setFilters({ ...filters, sort: e.target.value })}>
+          <option value="score">Sort: Score</option>
+          <option value="postedAt">Sort: Posted</option>
+          <option value="fetchedAt">Sort: Fetched</option>
+        </select>
+        <button onClick={() => load(page)} disabled={loading}>
+          {loading ? "Loading…" : "Refresh"}
+        </button>
+        <button
+          className="primary"
+          onClick={() => scoreCurrentPage(true)}
+          disabled={!!scoring || unscoredOnPage === 0}
+          title="Score unscored jobs on this page"
+        >
+          {scoring
+            ? `Scoring ${scoring.done}/${scoring.total}${scoring.failed ? ` (${scoring.failed} failed)` : ""}…`
+            : `Score page (${unscoredOnPage} unscored)`}
+        </button>
+        <button onClick={() => scoreCurrentPage(false)} disabled={!!scoring || jobs.length === 0}>
+          Re-score page
+        </button>
+        <span style={{ color: "var(--muted)", fontSize: 12, marginLeft: "auto" }}>
+          {total} jobs · page {page}/{totalPages}
+        </span>
+      </div>
+
+      <div className="content">
+        <div className="jobs-grid">
+          <div className="job-list">
+            {jobs.length === 0 ? (
+              <div className="empty">No jobs. Try the Ingest tab.</div>
+            ) : (
+              jobs.map((j) => (
+                <JobRow
+                  key={j.id}
+                  job={j}
+                  selected={selected?.id === j.id}
+                  onClick={() => setSelected(j)}
+                />
+              ))
+            )}
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                padding: 12,
+                justifyContent: "center",
+                borderTop: "1px solid var(--border)",
+                background: "var(--panel)",
+                position: "sticky",
+                bottom: 0,
+              }}
+            >
+              <button onClick={() => load(1)} disabled={page <= 1 || loading}>« First</button>
+              <button onClick={() => load(page - 1)} disabled={page <= 1 || loading}>‹ Prev</button>
+              <span style={{ alignSelf: "center", fontSize: 12, color: "var(--muted)" }}>
+                {page} / {totalPages}
+              </span>
+              <button onClick={() => load(page + 1)} disabled={page >= totalPages || loading}>Next ›</button>
+              <button onClick={() => load(totalPages)} disabled={page >= totalPages || loading}>Last »</button>
+            </div>
+          </div>
+          <div className="job-detail">
+            {selected ? (
+              <JobDetail job={selected} onChange={() => load(page)} />
+            ) : (
+              <div className="empty">Select a job to view details.</div>
+            )}
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function JobRow({
+  job,
+  selected,
+  onClick,
+}: {
+  job: Job;
+  selected: boolean;
+  onClick: () => void;
+}) {
+  const scoreClass =
+    job.score == null ? "" : job.score >= 80 ? "score-high" : job.score >= 60 ? "score-mid" : "score-low";
+  return (
+    <div className={`job-row ${selected ? "selected" : ""}`} onClick={onClick}>
+      <div className="title">
+        {job.title}
+        {job.score != null && <span className={`score-badge ${scoreClass}`}>{Math.round(job.score)}</span>}
+      </div>
+      <div className="meta">
+        {job.company} · {job.location || (job.remote ? "Remote" : "—")} ·{" "}
+        <span className="tag">{job.source}</span>
+        {job.status !== "new" && <span className="tag">{job.status}</span>}
+      </div>
+    </div>
+  );
+}

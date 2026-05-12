@@ -1,0 +1,19 @@
+{
+  "name": "jobs-automation",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": ["backend", "frontend"],
+  "scripts": {
+    "dev": "concurrently -k -n backend,frontend -c blue,green \"npm:dev:backend\" \"npm:dev:frontend\"",
+    "dev:backend": "npm --workspace backend run dev",
+    "dev:frontend": "npm --workspace frontend run dev",
+    "build": "npm --workspace backend run build && npm --workspace frontend run build",
+    "db:push": "npm --workspace backend run db:push",
+    "db:seed": "npm --workspace backend run db:seed",
+    "ingest": "npm --workspace backend run ingest",
+    "ingest:all": "npm --workspace backend run ingest:all"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.1"
+  }
+}

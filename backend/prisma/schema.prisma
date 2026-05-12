@@ -1,0 +1,66 @@
+// Prisma schema for JobsAutomation
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Profile {
+  id            String   @id @default(cuid())
+  name          String
+  email         String
+  phone         String?
+  location      String?
+  headline      String?
+  summary       String?
+  skills        String   // JSON array as string
+  experience    String   // JSON
+  education     String   // JSON
+  links         String?  // JSON (github, linkedin, portfolio)
+  preferences   String?  // JSON (target roles, locations, comp, remote)
+  baseResume    String?  // markdown/plain text master resume
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model Job {
+  id              String   @id @default(cuid())
+  source          String   // greenhouse | lever | ashby | linkedin | indeed
+  sourceJobId     String   // upstream id
+  url             String
+  company         String
+  title           String
+  location        String?
+  remote          Boolean  @default(false)
+  employmentType  String?
+  description     String   // raw text/HTML stripped
+  salaryMin       Int?
+  salaryMax       Int?
+  currency        String?
+  postedAt        DateTime?
+  fetchedAt       DateTime @default(now())
+
+  score           Float?
+  scoreReason     String?  // JSON: {pros, cons, fitSummary}
+  tailoredResume  String?
+  outreach        String?  // JSON {subject, body, recruiter?}
+  status          String   @default("new") // new | shortlisted | applied | rejected | hidden
+  notes           String?
+
+  @@unique([source, sourceJobId])
+  @@index([status])
+  @@index([score])
+}
+
+model IngestionRun {
+  id         String   @id @default(cuid())
+  source     String
+  query      String?
+  count      Int      @default(0)
+  error      String?
+  startedAt  DateTime @default(now())
+  finishedAt DateTime?
+}
