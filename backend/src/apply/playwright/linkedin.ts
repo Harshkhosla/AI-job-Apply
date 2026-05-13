@@ -12,6 +12,128 @@ function qaKey(company: string, q: string) {
   return `${company.toLowerCase()}::${q.toLowerCase()}`;
 }
 
+/**
+ * Heuristic last-resort fallback for required fields the bot couldn't answer.
+ * Common case: "How many years of experience in <tech>?" — if the candidate
+ * hasn't worked with that stack, default to 2 so the form doesn't reject the
+ * submission. For yes/no / select fields we pick the first non-placeholder
+ * option as a safe default.
+ *
+ * IMPORTANT: this must NEVER return null/empty for a required numeric field,
+ * because LinkedIn will block the Next button. When in doubt, return a small
+ * positive number that satisfies typical constraints ("> 0", "0-99", etc.).
+ */
+function fallbackValueFor(field: FormField): any {
+  const label = (field.label || "").toLowerCase();
+  const desc = (field.description || "").toLowerCase();
+  const blob = `${label} ${desc}`;
+
+  // Numeric defaults: years-of-experience, notice period, CTC/salary, "how many",
+  // or any field LinkedIn renders as type=number / mentions decimal-or-integer constraints.
+  const isYears =
+    /year[s]?\s*(of\s+)?(hands[- ]on\s+)?(experience|exp)/.test(blob) ||
+    /how\s+(many|much)\s+year/.test(blob) ||
+    /how\s+long.*(worked|experience)/.test(blob);
+  const isNoticePeriod = /notice\s*period/.test(blob);
+  const isCtcOrSalary = /\b(ctc|salary|compensation|expected\s*pay|current\s*pay)\b/.test(blob);
+  const isCount = /^\s*how\s+many\b/.test(label);
+  const wantsDecimalGtZero = /decimal.*(larger|greater|more)\s+than\s*0(\.0)?/.test(blob) ||
+    />\s*0(\.0)?\b/.test(blob);
+  const wantsWholeNumber = /whole\s*number/.test(blob) || /\binteger\b/.test(blob);
+  const numericRange = blob.match(/between\s*(\d+)\s*(and|to|-|\u2013)\s*(\d+)/);
+
+  if (
+    isYears ||
+    isNoticePeriod ||
+    isCtcOrSalary ||
+    isCount ||
+    field.type === "number" ||
+    wantsDecimalGtZero ||
+    wantsWholeNumber ||
+    !!numericRange
+  ) {
+    // Pick a number that satisfies the strongest constraint we detected.
+    if (isCtcOrSalary) return 1500000; // INR ~ 15 LPA — adjust expectations are caller-managed.
+    if (isNoticePeriod) return 30; // days
+    if (numericRange) {
+      const lo = parseInt(numericRange[1], 10);
+      const hi = parseInt(numericRange[3], 10);
+      if (!isNaN(lo) && !isNaN(hi)) {
+        // Pick 2 if it fits, otherwise the midpoint, otherwise lo+1.
+        if (2 >= lo && 2 <= hi) return 2;
+        const mid = Math.floor((lo + hi) / 2);
+        return mid > lo ? mid : Math.min(hi, lo + 1);
+      }
+    }
+    if (wantsDecimalGtZero) return 1; // strictly > 0
+    return 2;
+  }
+
+  // Yes/no — assume "No" unless the question is about willingness/authorization.
+  if (field.type === "yes_no" && field.options && field.options.length > 0) {
+    const wantsYes = /authoriz|eligible|willing|able to|legally|us citizen|over\s*18|comfortable|complet/.test(blob);
+    const target = wantsYes ? "yes" : "no";
+    const hit = field.options.find((o) =>
+      o.label.toLowerCase().includes(target) || o.value.toLowerCase().includes(target)
+    );
+    return hit ? hit.value : field.options[0].value;
+  }
+
+  // Select — first non-placeholder option.
+  if (field.type === "select" && field.options && field.options.length > 0) {
+    const real = field.options.find((o) => {
+      const t = o.label.toLowerCase().trim();
+      return o.value && t && !t.startsWith("select") && !t.startsWith("choose");
+    });
+    if (real) return real.value;
+  }
+
+  // Final last-ditch: if the field is required, give it a generic safe value
+  // depending on the inferred type. Anything is better than leaving a required
+  // field empty and getting blocked at Next.
+  if (field.required) {
+    if (field.type === "text" || field.type === "textarea") return "N/A";
+    if (field.type === "email") return null; // never fabricate emails
+    if (field.type === "phone") return null; // never fabricate phone
+  }
+  return null;
+}
+
+/**
+ * Try Claude first, then fall back to a heuristic if Claude declines/returns empty.
+ * Returns null when no fallback applies (caller leaves the field empty).
+ */
+async function resolveValueForField(
+  field: FormField,
+  profile: ProfileData,
+  context: { jobTitle: string; jobCompany: string; jobDescription: string },
+  extraDescription = ""
+): Promise<any> {
+  // Cache hit?
+  const cached = _qaCache.get(qaKey(context.jobCompany, field.label));
+  if (cached !== undefined && cached !== null && cached !== "") return cached;
+
+  try {
+    const enriched = extraDescription
+      ? { ...field, description: `${field.description ?? ""}\n${extraDescription}`.trim() }
+      : field;
+    const ans = await answerFormField({ field: enriched, profile, context });
+    if (ans.value !== null && ans.value !== undefined && ans.value !== "") {
+      _qaCache.set(qaKey(context.jobCompany, field.label), ans.value);
+      return ans.value;
+    }
+  } catch (e: any) {
+    console.log(`[linkedin] resolveValueForField Claude error: ${e?.message ?? e}`);
+  }
+  const fb = fallbackValueFor(field);
+  if (fb !== null && fb !== undefined && fb !== "") {
+    console.log(`[linkedin] using fallback value ${JSON.stringify(fb)} for "${field.label}"`);
+    _qaCache.set(qaKey(context.jobCompany, field.label), fb);
+    return fb;
+  }
+  return null;
+}
+
 // Persistent Chromium profile lives here. First launch is empty → you log in
 // to LinkedIn once in the opened window. From then on the profile keeps your
 // session forever — no cookie copying.
@@ -282,6 +404,14 @@ export async function fillLinkedInForm(
     );
   }
 
+  // Helper: when a later pass successfully fills a field that was previously
+  // pushed to `skipped[]`, remove the stale entry so the final count is honest.
+  const unskip = (id: string) => {
+    const i = skipped.findIndex((s) => s.id === id);
+    if (i >= 0) skipped.splice(i, 1);
+    if (!filled.includes(id)) filled.push(id);
+  };
+
   const MAX_STEPS = 8;
   for (let step = 0; step < MAX_STEPS; step++) {
     const stepFields = await extractFieldsFromModal(page);
@@ -387,6 +517,26 @@ export async function fillLinkedInForm(
           }
         }
       }
+      // If still no match (or Claude returned null) but the field is required,
+      // try the heuristic fallback before giving up. We must NEVER leave a
+      // required field empty — that blocks the Next button.
+      if ((!planned || planned.value === null || planned.value === undefined || planned.value === "") && f.required) {
+        const fb = fallbackValueFor(f);
+        if (fb !== null && fb !== undefined && fb !== "") {
+          console.log(`[linkedin]     -> using fallback ${JSON.stringify(fb)} for required field`);
+          _qaCache.set(qaKey(context?.jobCompany ?? "", f.label), fb);
+          planned = {
+            id: f.id,
+            label: f.label,
+            type: f.type,
+            value: fb,
+            source: "default",
+            confidence: 0.4,
+            required: f.required,
+          };
+          matchMethod = matchMethod || "fallback";
+        }
+      }
       if (!planned) {
         console.log(`[linkedin]     -> NO match in plan`);
         if (f.required) skipped.push({ id: f.id, reason: `no planned value for "${f.label}"` });
@@ -400,7 +550,11 @@ export async function fillLinkedInForm(
         if (f.required) skipped.push({ id: f.id, reason: `value missing for "${f.label}"` });
         continue;
       }
-      const ok = await fillFieldByLabel(page, f.id, f.label, planned.value);
+      const ok = await fillFieldByLabel(page, f.id, f.label, planned.value, {
+        type: f.type,
+        comboboxControls: f.comboboxControls,
+        profile,
+      });
       console.log(`[linkedin]     -> fill returned ${ok}`);
       if (ok) filled.push(f.id);
       else skipped.push({ id: f.id, reason: `could not locate input for "${f.label}"` });
@@ -465,15 +619,77 @@ export async function fillLinkedInForm(
       console.log("[linkedin] no Next button found — stopping.");
       break;
     }
-    if (nextInfo.disabled) {
-      console.log("[linkedin] Next is disabled — required field still empty.");
+
+    // PREFLIGHT: re-extract fields and make sure every required one has a
+    // value before clicking Next. This catches the case where a field was
+    // missed by the first pass (label fuzz mismatch, late-rendered widget,
+    // etc.) and avoids the validation roundtrip.
+    if (profile && context) {
+      const preflightFields = await extractFieldsFromModal(page);
+      const missingRequired = preflightFields.filter((f) => {
+        if (!f.required) return false;
+        if (f.type === "file") return false; // resume handled by LinkedIn default
+        if (f.label === "Yes" || f.label === "No") return false; // radio child
+        const cur = f.currentValue ? String(f.currentValue).trim() : "";
+        return cur === "";
+      });
+      if (missingRequired.length > 0) {
+        console.log(`[linkedin] preflight: ${missingRequired.length} required field(s) still empty — resolving`);
+        for (const f of missingRequired) {
+          console.log(`[linkedin]   preflight resolve "${f.label}" (type=${f.type})`);
+          const val = await resolveValueForField(f, profile, context);
+          if (val === null || val === undefined || val === "") {
+            console.log(`[linkedin]     no value resolvable — leaving empty`);
+            continue;
+          }
+          const ok = await fillFieldByLabel(page, f.id, f.label, val, {
+            type: f.type,
+            comboboxControls: f.comboboxControls,
+            profile,
+          });
+          console.log(`[linkedin]     preflight fill ${ok} (value=${JSON.stringify(val)})`);
+          if (ok) unskip(f.id);
+          await page.waitForTimeout(120);
+        }
+      }
+    }
+
+    // Re-read button state in case validation re-enabled / disabled it.
+    const nextInfoFresh = (await frame
+      .evaluate(
+        `(function(){
+          var root = document.querySelector("div.jobs-easy-apply-content")
+            || document.querySelector("div.jobs-easy-apply-modal")
+            || document.querySelector("div[data-test-modal]")
+            || document.querySelector("div.artdeco-modal")
+            || document.querySelector("div[role='dialog']")
+            || document.querySelector("dialog");
+          if (!root) return null;
+          var bs = root.querySelectorAll('button');
+          for (var i = 0; i < bs.length; i++) {
+            var b = bs[i];
+            var rect = b.getBoundingClientRect();
+            if (rect.width === 0 && rect.height === 0) continue;
+            var txt = (b.innerText || '').trim();
+            var aria = b.getAttribute('aria-label') || '';
+            if (/^next$|continue to next step|continue$/i.test(txt) || /^next$|continue to next step|continue$/i.test(aria)) {
+              return { text: txt, aria: aria, disabled: !!b.disabled };
+            }
+          }
+          return null;
+        })();` as any
+      )
+      .catch(() => null)) as { text: string; aria: string; disabled: boolean } | null;
+    const effectiveNext = nextInfoFresh ?? nextInfo;
+    if (effectiveNext.disabled) {
+      console.log("[linkedin] Next is disabled after preflight — required field still empty.");
       break;
     }
-    console.log(`[linkedin] clicking Next: "${nextInfo.text || nextInfo.aria}"`);
+    console.log(`[linkedin] clicking Next: "${effectiveNext.text || effectiveNext.aria}"`);
 
     // Snapshot the current field ids before clicking so we can detect a refusal.
     const beforeIds = stepFields.map((f) => f.id).join("|");
-    await clickModalButton(frame, nextInfo);
+    await clickModalButton(frame, effectiveNext);
     await page.waitForTimeout(1500);
 
     // Retry the same step up to 3 times if LinkedIn refuses to advance.
@@ -488,10 +704,45 @@ export async function fillLinkedInForm(
       console.log(`[linkedin] step didn't advance (retry ${retries + 1}/3) — checking inline errors...`);
       const errors = await collectInlineErrors(frame);
       console.log(`[linkedin] inline errors:`, errors);
-      if (errors.length === 0 || !profile || !context) {
-        console.log("[linkedin] no fixable errors — stopping");
+      if (!profile || !context) {
+        console.log("[linkedin] no profile/context — stopping");
         return { filled, skipped, reviewUrl: page.url() };
       }
+
+      // If there are no inline errors but Next still didn't advance, sweep
+      // every still-empty required field via Claude + fallback. This catches
+      // the case where LinkedIn highlights a field but doesn't render a
+      // matching error node, or where we mis-matched the error to a field.
+      if (errors.length === 0) {
+        let sweepFixed = 0;
+        for (const f of afterFields) {
+          if (!f.required) continue;
+          if (f.type === "file") continue;
+          if (f.label === "Yes" || f.label === "No") continue;
+          const cur = f.currentValue ? String(f.currentValue).trim() : "";
+          if (cur !== "") continue;
+          console.log(`[linkedin]   sweep: empty required "${f.label}" — resolving`);
+          const val = await resolveValueForField(f, profile, context, "Previous attempt was rejected. Provide a concrete value.");
+          if (val === null || val === undefined || val === "") continue;
+          const ok = await fillFieldByLabel(page, f.id, f.label, val, {
+            type: f.type,
+            comboboxControls: f.comboboxControls,
+            profile,
+          });
+          console.log(`[linkedin]   sweep fill ${ok} (value=${JSON.stringify(val)})`);
+          if (ok) { sweepFixed++; unskip(f.id); }
+        }
+        if (sweepFixed === 0) {
+          console.log("[linkedin] no inline errors and nothing to sweep — stopping");
+          return { filled, skipped, reviewUrl: page.url() };
+        }
+        console.log(`[linkedin] swept ${sweepFixed} empty required field(s); clicking Next again`);
+        await clickModalButton(frame, nextInfo);
+        await page.waitForTimeout(1500);
+        retries++;
+        continue;
+      }
+
       let fixedThisRound = 0;
       for (const err of errors) {
         // Find the field this error belongs to.
@@ -510,6 +761,26 @@ export async function fillLinkedInForm(
         if (!target) {
           console.log(`[linkedin]   unable to map error to field: ${JSON.stringify(err)}`);
           continue;
+        }
+        // Typeahead bias: if the field is a combobox and we already have a
+        // cached value, the value was probably correct — we just failed to
+        // pick a suggestion. Retry the keyboard fill once before re-asking Claude.
+        if (target.type === "typeahead") {
+          const cached = _qaCache.get(qaKey(context.jobCompany, target.label));
+          if (cached !== undefined && cached !== null && cached !== "") {
+            console.log(`[linkedin]   typeahead retry with cached value ${JSON.stringify(cached)} for "${target.label}"`);
+            const okRetry = await fillFieldByLabel(page, target.id, target.label, cached, {
+              type: target.type,
+              comboboxControls: target.comboboxControls,
+              profile,
+            });
+            if (okRetry) {
+              fixedThisRound++;
+              unskip(target.id);
+              continue;
+            }
+            console.log(`[linkedin]   typeahead retry failed — falling through to Claude`);
+          }
         }
         try {
           // Beef up the description so Claude returns a value that ACTUALLY satisfies the constraint.
@@ -530,13 +801,42 @@ export async function fillLinkedInForm(
             console.log(`[linkedin]   Claude returned empty/0 for ">0" constraint — forcing 1`);
           }
           if (valueToUse === null || valueToUse === undefined || valueToUse === "") {
-            console.log(`[linkedin]   still no value — leaving as-is`);
-            continue;
+            // Final fallback: years-of-experience defaults to 2, yes/no
+            // picks a safe default, select picks first real option.
+            const fb = fallbackValueFor(target);
+            if (fb !== null && fb !== undefined && fb !== "") {
+              console.log(`[linkedin]   Claude empty — using fallback ${JSON.stringify(fb)} for "${target.label}"`);
+              valueToUse = fb;
+            } else {
+              // Last-ditch: if the error message describes a numeric constraint,
+              // derive a safe number directly from it. We must not leave the
+              // field empty because it will block submission.
+              const m = err.message.match(/between\s*(\d+)\s*(and|to|-|\u2013)\s*(\d+)/i);
+              if (m) {
+                const lo = parseInt(m[1], 10);
+                const hi = parseInt(m[3], 10);
+                valueToUse = (2 >= lo && 2 <= hi) ? 2 : Math.min(hi, lo + 1);
+                console.log(`[linkedin]   forcing ${valueToUse} from range error message`);
+              } else if (/whole\s*number|integer/i.test(err.message)) {
+                valueToUse = 2;
+                console.log(`[linkedin]   forcing 2 (whole-number constraint)`);
+              } else if (/decimal/i.test(err.message)) {
+                valueToUse = 1;
+                console.log(`[linkedin]   forcing 1 (decimal constraint)`);
+              } else {
+                console.log(`[linkedin]   still no value — leaving as-is`);
+                continue;
+              }
+            }
           }
           _qaCache.set(qaKey(context.jobCompany, target.label), valueToUse);
-          const ok = await fillFieldByLabel(page, target.id, target.label, valueToUse);
+          const ok = await fillFieldByLabel(page, target.id, target.label, valueToUse, {
+            type: target.type,
+            comboboxControls: target.comboboxControls,
+            profile,
+          });
           console.log(`[linkedin]   re-fill returned ${ok}`);
-          if (ok) fixedThisRound++;
+          if (ok) { fixedThisRound++; unskip(target.id); }
         } catch (e: any) {
           console.log(`[linkedin]   Claude error: ${e?.message ?? e}`);
         }
@@ -616,6 +916,23 @@ const EXTRACT_FIELDS_SCRIPT = `
     }
     return "unknown";
   }
+  function detectTypeahead(input) {
+    // Returns the controlled listbox id if this input is a typeahead/combobox,
+    // or "" if not. Checks both ARIA conventions and LinkedIn-specific markup.
+    if (!input || input.tagName !== "INPUT") return "";
+    var role = (input.getAttribute("role") || "").toLowerCase();
+    var aac = (input.getAttribute("aria-autocomplete") || "").toLowerCase();
+    var ahp = (input.getAttribute("aria-haspopup") || "").toLowerCase();
+    var ctrls = input.getAttribute("aria-controls") || "";
+    var hasComboRole = role === "combobox";
+    var hasAutocomplete = aac === "list" || aac === "both" || aac === "inline";
+    var hasListPopup = ahp === "listbox" || ahp === "true";
+    var wrap = input.closest(".basic-typeahead, [class*='typeahead'], [class*='Typeahead']");
+    if (hasComboRole || hasAutocomplete || hasListPopup || !!wrap) {
+      return ctrls || (wrap ? (wrap.getAttribute("id") || "") : "");
+    }
+    return "";
+  }
   var out = [];
   var seen = {};
   var nodes = root.querySelectorAll("input:not([type='hidden']), select, textarea, fieldset");
@@ -687,7 +1004,18 @@ const EXTRACT_FIELDS_SCRIPT = `
       }
     }
 
-    out.push({ id: id, label: label, type: type, required: required, options: options, currentValue: currentValueOf(el) });
+    var comboboxControls = "";
+    if (el.tagName === "INPUT") {
+      comboboxControls = detectTypeahead(el);
+      if (comboboxControls || (type === "text" && (
+        (el.getAttribute("role") || "").toLowerCase() === "combobox" ||
+        (el.getAttribute("aria-autocomplete") || "").toLowerCase() !== ""
+      ))) {
+        type = "typeahead";
+      }
+    }
+
+    out.push({ id: id, label: label, type: type, required: required, options: options, currentValue: currentValueOf(el), comboboxControls: comboboxControls });
   }
   return out;
 })();
@@ -905,7 +1233,27 @@ const FILL_FIELD_SCRIPT = `
 })
 `;
 
-async function fillFieldByLabel(page: Page, id: string, label: string, value: any): Promise<boolean> {
+interface FillOpts {
+  type?: string;
+  comboboxControls?: string;
+  /** Optional profile so typeahead can prefer suggestions matching candidate region. */
+  profile?: ProfileData;
+}
+
+async function fillFieldByLabel(
+  page: Page,
+  id: string,
+  label: string,
+  value: any,
+  opts?: FillOpts
+): Promise<boolean> {
+  // Typeahead/combobox fields cannot be filled by setting `value` programmatically —
+  // LinkedIn requires the user to pick a suggestion from the popup listbox. Route
+  // those through the keyboard-driven helper.
+  if (opts?.type === "typeahead") {
+    return fillTypeaheadByLabel(page, id, label, value, opts);
+  }
+
   try {
     const frame = (page as any)._modalFrame ?? (await pickModalFrame(page));
     if (!frame) {
@@ -935,6 +1283,235 @@ async function fillFieldByLabel(page: Page, id: string, label: string, value: an
     console.log(`[linkedin]       fill-script threw: ${e?.message ?? e}`);
     return false;
   }
+}
+
+/**
+ * Fill a LinkedIn typeahead (combobox) input — e.g. "Location (city)".
+ *
+ * These fields look like plain text inputs but reject anything that wasn't
+ * picked from the suggestion popup. We must:
+ *   1. focus the real <input>
+ *   2. clear any existing text
+ *   3. type the value with real keystrokes (so React fires the search XHR)
+ *   4. wait for the [role="option"] listbox to appear
+ *   5. click the best-matching option
+ *
+ * If no listbox appears we try ArrowDown+Enter once, and only then give up.
+ */
+async function fillTypeaheadByLabel(
+  page: Page,
+  id: string,
+  label: string,
+  value: any,
+  opts?: FillOpts
+): Promise<boolean> {
+  const text = String(value ?? "").trim();
+  if (!text) {
+    console.log(`[linkedin]       typeahead: empty value for "${label}", skipping`);
+    return false;
+  }
+  const frame = (page as any)._modalFrame ?? (await pickModalFrame(page));
+  if (!frame) {
+    console.log(`[linkedin]       typeahead: no frame holds the modal`);
+    return false;
+  }
+
+  // Locate the input. Try id first, then label[for], then aria-label.
+  const escId = id ? id.replace(/(["\\\.\:#\[\]\(\)\,\s])/g, "\\$1") : "";
+  let input = null as any;
+  const tryLocate = async (sel: string) => {
+    try {
+      const loc = frame.locator(sel).first();
+      const count = await loc.count();
+      if (count > 0) return loc;
+    } catch {
+      /* ignore */
+    }
+    return null;
+  };
+  if (escId) input = await tryLocate(`#${escId}`);
+  if (!input) input = await tryLocate(`input[name="${id}"]`);
+  if (!input) {
+    // Find <label> whose text contains the field label, then the input it points at.
+    try {
+      const forIdJson = JSON.stringify(label.toLowerCase());
+      const forId = (await frame.evaluate(
+        `(function(){
+          var labelLc = ${forIdJson};
+          var root = document.querySelector("div.jobs-easy-apply-content")
+            || document.querySelector("div.jobs-easy-apply-modal")
+            || document.querySelector("div[data-test-modal]")
+            || document.querySelector("div.artdeco-modal")
+            || document.querySelector("div[role='dialog']")
+            || document.querySelector("dialog")
+            || document.body;
+          var labels = root.querySelectorAll("label");
+          for (var i = 0; i < labels.length; i++) {
+            var t = (labels[i].textContent || "").replace(/\\s+/g, " ").trim().toLowerCase();
+            if (t.indexOf(labelLc) >= 0) {
+              var fid = labels[i].getAttribute("for");
+              if (fid) return fid;
+            }
+          }
+          return "";
+        })();` as any
+      )) as string;
+      if (forId) input = await tryLocate(`#${forId.replace(/(["\\\.\:#\[\]\(\)\,\s])/g, "\\$1")}`);
+    } catch {
+      /* ignore */
+    }
+  }
+  if (!input) input = await tryLocate(`input[aria-label*="${label.replace(/"/g, '\\"')}" i]`);
+  if (!input) {
+    console.log(`[linkedin]       typeahead: could not locate input for "${label}"`);
+    return false;
+  }
+
+  try {
+    await input.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => undefined);
+    await input.click({ timeout: 5000 });
+  } catch (e: any) {
+    console.log(`[linkedin]       typeahead: click threw: ${e?.message ?? e}`);
+    return false;
+  }
+
+  // Clear any existing value (LinkedIn may have prefilled or we may be retrying).
+  try {
+    await input.fill("");
+  } catch {
+    /* fall back to manual select-all + delete */
+    try {
+      const isMac = process.platform === "darwin";
+      await page.keyboard.press(isMac ? "Meta+A" : "Control+A");
+      await page.keyboard.press("Delete");
+    } catch {
+      /* ignore */
+    }
+  }
+  await page.waitForTimeout(150);
+
+  // Type with delay so React fires keystroke handlers and the suggestions XHR runs.
+  try {
+    await input.type(text, { delay: 60 });
+  } catch (e: any) {
+    console.log(`[linkedin]       typeahead: type threw: ${e?.message ?? e}`);
+    return false;
+  }
+
+  // Wait for the suggestions listbox to render. LinkedIn typically renders
+  // suggestions in a sibling <div role="listbox"> containing <div role="option">.
+  // The input's aria-controls points at the listbox id — use it when known.
+  const listboxId = opts?.comboboxControls || "";
+  const optionSel = listboxId
+    ? `#${listboxId.replace(/(["\\\.\:#\[\]\(\)\,\s])/g, "\\$1")} [role="option"], [aria-labelledby="${listboxId}"] [role="option"]`
+    : `[role="listbox"] [role="option"], [role="option"]`;
+
+  let optionTexts: string[] = [];
+  const deadline = Date.now() + 3500;
+  while (Date.now() < deadline) {
+    try {
+      optionTexts = (await frame.evaluate(
+        `(function(sel){
+          var nodes = document.querySelectorAll(sel);
+          var out = [];
+          for (var i = 0; i < nodes.length; i++) {
+            var n = nodes[i];
+            var rect = n.getBoundingClientRect();
+            if (rect.width === 0 && rect.height === 0) continue;
+            out.push((n.textContent || "").replace(/\\s+/g, " ").trim());
+          }
+          return out;
+        })(${JSON.stringify(optionSel)});` as any
+      )) as string[];
+    } catch {
+      optionTexts = [];
+    }
+    if (optionTexts && optionTexts.length > 0) break;
+    await page.waitForTimeout(150);
+  }
+
+  if (!optionTexts || optionTexts.length === 0) {
+    console.log(`[linkedin]       typeahead: no suggestions appeared for "${text}" — trying ArrowDown+Enter`);
+    try {
+      await page.keyboard.press("ArrowDown");
+      await page.waitForTimeout(200);
+      await page.keyboard.press("Enter");
+      await page.waitForTimeout(300);
+      const finalVal = await input.inputValue().catch(() => "");
+      if (finalVal && finalVal.trim().length >= text.length) {
+        console.log(`[linkedin]       typeahead: ArrowDown+Enter committed value="${finalVal}"`);
+        return true;
+      }
+    } catch {
+      /* fall through */
+    }
+    console.log(`[linkedin]       typeahead: failed — no listbox for "${label}"="${text}"`);
+    return false;
+  }
+
+  // Rank options. Bias toward profile region/country when multiple match.
+  const hint = (() => {
+    const p: any = opts?.profile ?? {};
+    const parts: string[] = [];
+    if (typeof p.location === "string") parts.push(p.location);
+    if (Array.isArray(p.locations)) parts.push(...p.locations);
+    if (p.preferences && Array.isArray(p.preferences.locations)) parts.push(...p.preferences.locations);
+    if (p.personal && typeof p.personal.country === "string") parts.push(p.personal.country);
+    return parts.join(" ").toLowerCase();
+  })();
+  const textLc = text.toLowerCase();
+  function rank(opt: string): number {
+    const lc = opt.toLowerCase();
+    if (lc === textLc) return 100;
+    let r = 0;
+    if (lc.startsWith(textLc)) r += 40;
+    if (lc.includes(textLc)) r += 20;
+    if (hint) {
+      const hintTokens = hint.split(/[\s,]+/).filter((t) => t.length >= 3);
+      for (const ht of hintTokens) if (lc.includes(ht)) r += 5;
+    }
+    return r;
+  }
+  let bestIdx = 0;
+  let bestScore = -1;
+  for (let i = 0; i < optionTexts.length; i++) {
+    const s = rank(optionTexts[i]);
+    if (s > bestScore) {
+      bestScore = s;
+      bestIdx = i;
+    }
+  }
+  const chosen = optionTexts[bestIdx];
+  console.log(`[linkedin]       typeahead: ${optionTexts.length} suggestion(s); picking #${bestIdx} "${chosen}" (score=${bestScore})`);
+
+  // Click the option by its visible text inside the listbox. Use Playwright
+  // so we get a real mouse event that LinkedIn's handler accepts.
+  try {
+    const optionLoc = frame
+      .locator(optionSel)
+      .filter({ hasText: chosen })
+      .first();
+    await optionLoc.click({ timeout: 3000 });
+  } catch (e: any) {
+    // Fall back to keyboard navigation.
+    console.log(`[linkedin]       typeahead: click on option threw (${e?.message ?? e}) — falling back to keyboard`);
+    try {
+      for (let i = 0; i <= bestIdx; i++) {
+        await page.keyboard.press("ArrowDown");
+        await page.waitForTimeout(50);
+      }
+      await page.keyboard.press("Enter");
+    } catch (e2: any) {
+      console.log(`[linkedin]       typeahead: keyboard fallback threw: ${e2?.message ?? e2}`);
+      return false;
+    }
+  }
+
+  await page.waitForTimeout(300);
+  const finalVal = await input.inputValue().catch(() => "");
+  const ok = !!finalVal && finalVal.trim().length > 0;
+  console.log(`[linkedin]       typeahead: input now = "${finalVal}" (ok=${ok})`);
+  return ok;
 }
 
 /**
