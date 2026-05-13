@@ -30,7 +30,7 @@ export interface FormField {
 }
 
 export interface ParsedForm {
-  source: "greenhouse" | "lever" | "ashby";
+  source: "greenhouse" | "lever" | "ashby" | "linkedin" | "indeed";
   jobBoardToken: string; // company slug
   jobId: string;         // upstream job id
   applyUrl: string;
