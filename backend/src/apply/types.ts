@@ -12,6 +12,7 @@ export type FieldType =
   | "date"
   | "file"
   | "checkbox"
+  | "typeahead"
   | "unknown";
 
 export interface FormField {
@@ -24,6 +25,8 @@ export interface FormField {
   description?: string;  // help/hint text
   /** What the form already has (browser-side fields only). */
   currentValue?: string;
+  /** For typeahead/combobox fields: the id of the listbox this input controls. */
+  comboboxControls?: string;
 }
 
 export interface ParsedForm {

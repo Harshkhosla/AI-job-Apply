@@ -5,6 +5,43 @@ import type { FormField, ParsedForm, PlannedField } from "../types.js";
 import type { ProfileData } from "../../types.js";
 import { answerFormField } from "../../llm/claude.js";
 
+/**
+ * If Claude can't answer a question (returns null/empty), use a heuristic
+ * fallback so the form still passes validation. Most common case is
+ * "How many years of experience in <tech>?" — default to 2 when the
+ * candidate hasn't worked with that stack. For yes/no and select we pick
+ * a safe default.
+ */
+function fallbackValueFor(field: FormField): any {
+  const label = (field.label || "").toLowerCase();
+  const desc = (field.description || "").toLowerCase();
+  const blob = `${label} ${desc}`;
+
+  const isYears =
+    /year[s]?\s*(of\s+)?(hands[- ]on\s+)?(experience|exp)/.test(blob) ||
+    /how\s+(many|much)\s+year/.test(blob) ||
+    /how\s+long.*(worked|experience)/.test(blob);
+  if (isYears || field.type === "number") return 2;
+
+  if (field.type === "yes_no" && field.options && field.options.length > 0) {
+    const wantsYes = /authoriz|eligible|willing|able to|legally|us citizen|over\s*18/.test(blob);
+    const target = wantsYes ? "yes" : "no";
+    const hit = field.options.find((o) =>
+      o.label.toLowerCase().includes(target) || o.value.toLowerCase().includes(target)
+    );
+    return hit ? hit.value : field.options[0].value;
+  }
+
+  if (field.type === "select" && field.options && field.options.length > 0) {
+    const real = field.options.find((o) => {
+      const t = o.label.toLowerCase().trim();
+      return o.value && t && !t.startsWith("select") && !t.startsWith("choose");
+    });
+    if (real) return real.value;
+  }
+  return null;
+}
+
 // Shared persistent profile dir — keep separate from LinkedIn so
 // company sessions / cookies don't collide.
 const PROFILE_DIR = path.resolve(process.cwd(), "data", "playwright", "greenhouse-profile");
@@ -186,13 +223,40 @@ export async function fillGreenhouseForm(
         console.log(`[greenhouse]     -> Claude error: ${e?.message ?? e}`);
       }
     }
+    if (!planned && f.required) {
+      // Last-resort fallback for required fields the candidate doesn't have
+      // experience with (e.g. "years of Ruby on Rails" → 2).
+      const fb = fallbackValueFor(f);
+      if (fb !== null && fb !== undefined && fb !== "") {
+        console.log(`[greenhouse]     -> using fallback value ${JSON.stringify(fb)}`);
+        planned = {
+          id: f.id,
+          label: f.label,
+          type: f.type,
+          value: fb,
+          source: "default",
+          confidence: 0.4,
+          required: f.required,
+        };
+      }
+    }
     if (!planned) {
       if (f.required) skipped.push({ id: f.id, reason: `no value for "${f.label}"` });
       continue;
     }
     if (planned.value === null || planned.value === undefined || planned.value === "") {
-      if (f.required) skipped.push({ id: f.id, reason: `empty value for "${f.label}"` });
-      continue;
+      if (f.required) {
+        const fb = fallbackValueFor(f);
+        if (fb !== null && fb !== undefined && fb !== "") {
+          console.log(`[greenhouse]     -> empty planned value; using fallback ${JSON.stringify(fb)}`);
+          planned = { ...planned, value: fb, source: "default" };
+        } else {
+          skipped.push({ id: f.id, reason: `empty value for "${f.label}"` });
+          continue;
+        }
+      } else {
+        continue;
+      }
     }
     const ok = await fillFieldById(page, f.id, planned.value);
     console.log(`[greenhouse]     -> fill returned ${ok}`);
