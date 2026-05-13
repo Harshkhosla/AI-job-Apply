@@ -3,11 +3,19 @@ import JobsView from "./components/JobsView";
 import IngestView from "./components/IngestView";
 import ProfileView from "./components/ProfileView";
 import ApplicationsView from "./components/ApplicationsView";
+import FindJobsView from "./components/FindJobsView";
 
-type View = "jobs" | "applications" | "ingest" | "profile";
+type View = "find" | "jobs" | "applications" | "ingest" | "profile";
+
+export interface JobsPreset {
+  source?: string;
+  hours?: string;
+  q?: string;
+}
 
 export default function App() {
-  const [view, setView] = useState<View>("jobs");
+  const [view, setView] = useState<View>("find");
+  const [jobsPreset, setJobsPreset] = useState<JobsPreset | undefined>(undefined);
 
   return (
     <div className="app">
@@ -15,10 +23,19 @@ export default function App() {
         <h1>AI Job Hunter</h1>
         <div className="nav">
           <button
-            className={view === "jobs" ? "active" : ""}
-            onClick={() => setView("jobs")}
+            className={view === "find" ? "active" : ""}
+            onClick={() => setView("find")}
           >
-            Jobs
+            Find Jobs
+          </button>
+          <button
+            className={view === "jobs" ? "active" : ""}
+            onClick={() => {
+              setJobsPreset(undefined);
+              setView("jobs");
+            }}
+          >
+            All Jobs
           </button>
           <button
             className={view === "applications" ? "active" : ""}
@@ -30,7 +47,7 @@ export default function App() {
             className={view === "ingest" ? "active" : ""}
             onClick={() => setView("ingest")}
           >
-            Ingest
+            Ingest (advanced)
           </button>
           <button
             className={view === "profile" ? "active" : ""}
@@ -45,7 +62,15 @@ export default function App() {
         </p>
       </aside>
       <main className="main">
-        {view === "jobs" && <JobsView />}
+        {view === "find" && (
+          <FindJobsView
+            onDone={(filters) => {
+              setJobsPreset(filters);
+              setView("jobs");
+            }}
+          />
+        )}
+        {view === "jobs" && <JobsView preset={jobsPreset} />}
         {view === "applications" && <ApplicationsView />}
         {view === "ingest" && <IngestView />}
         {view === "profile" && <ProfileView />}

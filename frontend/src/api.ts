@@ -158,6 +158,11 @@ export const api = {
       `/api/applications/${applicationId}/fill-linkedin`,
       { method: "POST" }
     ),
+  fillApplication: (applicationId: string) =>
+    req<{ filled: string[]; skipped: { id: string; reason: string }[]; reviewUrl: string }>(
+      `/api/applications/${applicationId}/fill`,
+      { method: "POST" }
+    ),
   closeLinkedInBrowser: () =>
     req<{ ok: boolean }>("/api/linkedin/close", { method: "POST" }),
 

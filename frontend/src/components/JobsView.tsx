@@ -3,7 +3,11 @@ import { api, type Job } from "../api";
 import JobDetail from "./JobDetail";
 import BatchApplyModal from "./BatchApplyModal";
 
-export default function JobsView() {
+interface JobsViewProps {
+  preset?: { source?: string; hours?: string; q?: string };
+}
+
+export default function JobsView({ preset }: JobsViewProps = {}) {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -11,11 +15,11 @@ export default function JobsView() {
   const [selected, setSelected] = useState<Job | null>(null);
   const [filters, setFilters] = useState({
     status: "",
-    source: "",
+    source: preset?.source ?? "",
     minScore: "",
-    q: "",
+    q: preset?.q ?? "",
     sort: "score",
-    hours: "",
+    hours: preset?.hours ?? "",
     fit: "",
     easyApply: "",
   });
@@ -48,6 +52,18 @@ export default function JobsView() {
     load(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters]);
+
+  // If a fresh preset is passed in, apply it.
+  useEffect(() => {
+    if (!preset) return;
+    setFilters((prev) => ({
+      ...prev,
+      source: preset.source ?? "",
+      hours: preset.hours ?? "",
+      q: preset.q ?? "",
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preset?.source, preset?.hours, preset?.q]);
 
   // Score each job on the *current page* sequentially so you get progress feedback.
   async function scoreCurrentPage(onlyUnscored: boolean) {

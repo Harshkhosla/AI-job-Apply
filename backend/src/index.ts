@@ -28,6 +28,7 @@ import {
   getOrCreateSettings,
   updateSettings,
   fillLinkedInApplication,
+  fillGreenhouseApplication,
   closeLinkedInBrowser,
 } from "./services/applications.js";
 import {
@@ -347,6 +348,24 @@ app.put("/api/settings/auto-apply", async (req, res) => {
 app.post("/api/applications/:id/fill-linkedin", async (req, res) => {
   try {
     const r = await fillLinkedInApplication(req.params.id);
+    res.json(r);
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message ?? String(e) });
+  }
+});
+
+// Generic "fill in browser" that picks the right executor by source.
+app.post("/api/applications/:id/fill", async (req, res) => {
+  try {
+    const a = await prisma.application.findUnique({
+      where: { id: req.params.id },
+      include: { job: true },
+    });
+    if (!a) return res.status(404).json({ error: "not found" });
+    let r: any;
+    if (a.job.source === "linkedin") r = await fillLinkedInApplication(a.id);
+    else if (a.job.source === "greenhouse") r = await fillGreenhouseApplication(a.id);
+    else return res.status(400).json({ error: `Browser fill not supported for ${a.job.source}` });
     res.json(r);
   } catch (e: any) {
     res.status(500).json({ error: e?.message ?? String(e) });

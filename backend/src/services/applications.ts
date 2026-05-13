@@ -8,6 +8,12 @@ import {
   fillLinkedInForm,
   closeBrowser,
 } from "../apply/playwright/linkedin.js";
+import {
+  openGreenhouseJob,
+  fillGreenhouseForm,
+  closeBrowser as closeGreenhouseBrowser,
+} from "../apply/playwright/greenhouse.js";
+import path from "node:path";
 import type { NormalizedJob } from "../types.js";
 
 function toNormalized(j: any): NormalizedJob {
@@ -85,7 +91,9 @@ export async function planApplication(
   const form =
     job.source === "linkedin"
       ? await openLinkedInJob(job.url, draft.id)
-      : await parseForm(job.source, job.url);
+      : job.source === "greenhouse"
+        ? await openGreenhouseJob(job.url, draft.id)
+        : await parseForm(job.source, job.url);
   const plan = await buildFieldPlan(form, profile, {
     jobTitle: job.title,
     jobCompany: job.company,
@@ -150,6 +158,51 @@ export async function fillLinkedInApplication(applicationId: string) {
 
 export async function closeLinkedInBrowser() {
   await closeBrowser();
+}
+
+/**
+ * Fill the Greenhouse application form in the browser. Same UX as LinkedIn:
+ * bot fills fields, attaches uploaded resume, stops before submit.
+ */
+export async function fillGreenhouseApplication(applicationId: string) {
+  const app = await prisma.application.findUnique({
+    where: { id: applicationId },
+    include: { job: true },
+  });
+  if (!app) throw new Error("Application not found");
+  if (app.job.source !== "greenhouse") {
+    throw new Error("Browser-fill (Greenhouse) only supports Greenhouse jobs.");
+  }
+  if (!app.fieldPlan) throw new Error("Plan the application first.");
+  const plan = JSON.parse(app.fieldPlan);
+  const profile = await getProfile();
+  if (!profile) throw new Error("Profile not set");
+
+  // Resolve resume to an absolute path the browser can attach.
+  let resumeAbsPath: string | undefined;
+  if (profile.resumeFileUrl) {
+    // resumeFileUrl is like "/files/resumes/<name>" relative to DATA_DIR
+    const rel = profile.resumeFileUrl.replace(/^\/files\//, "");
+    resumeAbsPath = path.resolve(process.cwd(), "data", rel);
+  }
+
+  const result = await fillGreenhouseForm(
+    applicationId,
+    plan.fields,
+    profile,
+    {
+      jobTitle: app.job.title,
+      jobCompany: app.job.company,
+      jobDescription: app.job.description ?? "",
+    },
+    resumeAbsPath
+  );
+  return result;
+}
+
+export async function closeAllBrowsers() {
+  await closeBrowser();
+  await closeGreenhouseBrowser();
 }
 
 export async function getApplicationByJob(jobId: string) {

@@ -1,5 +1,9 @@
 import { prisma } from "../db.js";
-import { planApplication, fillLinkedInApplication } from "./applications.js";
+import {
+  planApplication,
+  fillLinkedInApplication,
+  fillGreenhouseApplication,
+} from "./applications.js";
 
 /**
  * In-memory batch-apply session. We orchestrate "plan → fill → wait for user
@@ -134,7 +138,11 @@ async function runBatchLoop(session: BatchSession) {
 
       state.phase = "filling";
       console.log(`[batch ${session.id}] filling...`);
-      const result = await fillLinkedInApplication(app.id);
+      // Pick the right executor based on source.
+      const result =
+        existingJob?.source === "greenhouse"
+          ? await fillGreenhouseApplication(app.id)
+          : await fillLinkedInApplication(app.id);
       state.filled = result.filled.length;
       state.skipped = result.skipped.length;
 

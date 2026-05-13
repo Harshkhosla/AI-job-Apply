@@ -20,7 +20,7 @@ export default function ApplyPanel({ job }: { job: Job }) {
   const [msg, setMsg] = useState("");
 
   const supported = ["greenhouse", "lever", "ashby", "linkedin"].includes(job.source);
-  const isLinkedIn = job.source === "linkedin";
+  const browserFillable = ["linkedin", "greenhouse"].includes(job.source);
   const [filling, setFilling] = useState(false);
 
   async function load() {
@@ -81,7 +81,7 @@ export default function ApplyPanel({ job }: { job: Job }) {
     setFilling(true);
     setMsg("");
     try {
-      const r = await api.fillLinkedIn(appn.id);
+      const r = await api.fillApplication(appn.id);
       setMsg(
         `Filled ${r.filled.length}/${r.filled.length + r.skipped.length} fields. Review in the browser window, then click Submit there.`
       );
@@ -106,7 +106,7 @@ export default function ApplyPanel({ job }: { job: Job }) {
           <input type="checkbox" checked={withCover} onChange={(e) => setWithCover(e.target.checked)} />
           Generate cover letter
         </label>
-        {appn && isLinkedIn && (
+        {appn && browserFillable && (
           <button onClick={fillBrowser} disabled={planning || filling}>
             {filling ? "Filling browser…" : "Fill in browser"}
           </button>
@@ -122,12 +122,12 @@ export default function ApplyPanel({ job }: { job: Job }) {
         {msg && <span style={{ color: "var(--muted)", fontSize: 12 }}>{msg}</span>}
       </div>
 
-      {isLinkedIn && (
+      {browserFillable && (
         <div className="section" style={{ borderLeft: "3px solid var(--warn)", fontSize: 12 }}>
-          <strong>LinkedIn Easy Apply (beta).</strong> A Chromium window opens with its own profile.
-          On <em>first run</em> it will land on the login page — sign in there once and the session
-          is remembered forever. The bot then fills fields and <strong>stops before Submit</strong>.
-          You review and click Submit yourself. Throttle: 1 plan / 60s, daily cap in Settings.
+          <strong>Browser auto-apply.</strong> A Chromium window opens with its own profile.
+          The bot fills fields (and attaches your uploaded resume on Greenhouse) then{" "}
+          <strong>stops before Submit</strong>. You review and click Submit yourself.
+          {job.source === "linkedin" && " On first run, sign in to LinkedIn in the opened window."}
         </div>
       )}
 
