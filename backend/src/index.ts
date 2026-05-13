@@ -29,7 +29,9 @@ import {
   updateSettings,
   fillLinkedInApplication,
   fillGreenhouseApplication,
+  fillIndeedApplication,
   closeLinkedInBrowser,
+  closeIndeedBrowserSession,
 } from "./services/applications.js";
 import {
   startBatch,
@@ -365,6 +367,7 @@ app.post("/api/applications/:id/fill", async (req, res) => {
     let r: any;
     if (a.job.source === "linkedin") r = await fillLinkedInApplication(a.id);
     else if (a.job.source === "greenhouse") r = await fillGreenhouseApplication(a.id);
+    else if (a.job.source === "indeed") r = await fillIndeedApplication(a.id);
     else return res.status(400).json({ error: `Browser fill not supported for ${a.job.source}` });
     res.json(r);
   } catch (e: any) {
@@ -405,6 +408,36 @@ app.post("/api/batch/:id/cancel", (req, res) => {
 });
 app.get("/api/batch", (_req, res) => {
   res.json(listBatches());
+});
+
+// ---------- Indeed ----------
+import { loginToIndeed, closeIndeedScraper } from "./sources/indeed.js";
+
+// Indeed: push field-plan values into the live Indeed Apply modal
+app.post("/api/applications/:id/fill-indeed", async (req, res) => {
+  try {
+    const r = await fillIndeedApplication(req.params.id);
+    res.json(r);
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message ?? String(e) });
+  }
+});
+
+// Indeed login - opens browser for user to log in
+app.post("/api/indeed/login", async (_req, res) => {
+  try {
+    const success = await loginToIndeed();
+    res.json({ ok: success });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message ?? String(e) });
+  }
+});
+
+// Close Indeed browser
+app.post("/api/indeed/close", async (_req, res) => {
+  await closeIndeedBrowserSession();
+  await closeIndeedScraper();
+  res.json({ ok: true });
 });
 
 const port = Number(process.env.PORT ?? 4000);

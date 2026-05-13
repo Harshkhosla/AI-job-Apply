@@ -99,7 +99,10 @@ export const LINKEDIN_SEARCHES: KeywordSearch[] = [
   { query: "software engineer typescript", location: "Remote", pages: 1 },
 ];
 export const INDEED_SEARCHES: KeywordSearch[] = [
-  { query: "full stack developer react node", location: "India", pages: 2 },
-  { query: "software engineer typescript", location: "Bengaluru", pages: 1 },
-  { query: "next.js developer", location: "India", pages: 1 },
+  { query: "full stack developer", location: "Bengaluru, Karnataka", pages: 2 },
+  { query: "software engineer", location: "Bengaluru, Karnataka", pages: 2 },
+  { query: "react developer", location: "Bengaluru, Karnataka", pages: 1 },
+  { query: "node.js developer", location: "India", pages: 1 },
+  { query: "MERN stack", location: "India", pages: 1 },
+  { query: "frontend developer", location: "Bengaluru, Karnataka", pages: 1 },
 ];

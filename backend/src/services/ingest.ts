@@ -4,7 +4,7 @@ import { fetchGreenhouse } from "../sources/greenhouse.js";
 import { fetchLever } from "../sources/lever.js";
 import { fetchAshby } from "../sources/ashby.js";
 import { fetchLinkedIn, fetchLinkedInJobDetail } from "../sources/linkedin.js";
-import { fetchIndeed } from "../sources/indeed.js";
+import { fetchIndeed, fetchIndeedJobDetail } from "../sources/indeed.js";
 import {
   GREENHOUSE_COMPANIES,
   LEVER_COMPANIES,
@@ -68,6 +68,17 @@ export async function ingest(req: IngestRequest): Promise<{ inserted: number; to
           req.pages ?? 1,
           req.withinHours
         );
+        // hydrate descriptions (best-effort)
+        for (const j of jobs) {
+          if (!j.description) {
+            try {
+              j.description = await fetchIndeedJobDetail(j.sourceJobId);
+              await new Promise((r) => setTimeout(r, 800));
+            } catch {
+              // ignore
+            }
+          }
+        }
         break;
     }
 
