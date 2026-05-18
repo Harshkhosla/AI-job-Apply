@@ -7,14 +7,18 @@ interface Props {
   onDone: (filters: { source?: string; hours?: string; q?: string }) => void;
 }
 
+// LinkedIn-only mode: other portals commented out. Re-enable by restoring
+// these entries and uncommenting step 1 / fetchNow branches below.
 const PORTAL_LABELS: Record<Portal, string> = {
   linkedin: "LinkedIn",
-  indeed: "Indeed",
-  greenhouse: "Greenhouse boards",
-  lever: "Lever boards",
-  ashby: "Ashby boards",
-  all: "All sources (curated companies + searches)",
-};
+  // indeed: "Indeed",
+  // greenhouse: "Greenhouse boards",
+  // lever: "Lever boards",
+  // ashby: "Ashby boards",
+  // all: "All sources (curated companies + searches)",
+} as Record<Portal, string>;
+// Reference so TS doesn't complain about unused symbol while the table is trimmed.
+void PORTAL_LABELS;
 
 const POPULAR_LOCATIONS = [
   "Bengaluru, India",
@@ -42,11 +46,14 @@ const POPULAR_KEYWORDS = [
 ];
 
 export default function FindJobsView({ onDone }: Props) {
-  const [step, setStep] = useState<1 | 2 | 3>(1);
-  const [portal, setPortal] = useState<Portal>("linkedin");
+  // LinkedIn-only mode: stepper reduced from 3 → 2 steps.
+  const [step, setStep] = useState<1 | 2>(1);
+  // Locked to LinkedIn. Setter retained so re-enabling the portal picker is a one-line uncomment.
+  const [portal /*, setPortal */] = useState<Portal>("linkedin");
   const [location, setLocation] = useState("Bengaluru, India");
   const [keywords, setKeywords] = useState("full stack engineer");
-  const [hours, setHours] = useState<"24" | "48" | "168" | "720" | "">("48");
+  // LinkedIn-only mode capped at 5 days (server-enforced). Older options removed.
+  const [hours, setHours] = useState<"24" | "48" | "72" | "120" | "">("48");
   const [easyApplyOnly, setEasyApplyOnly] = useState(false);
   const [pages, setPages] = useState(2);
 
@@ -55,42 +62,45 @@ export default function FindJobsView({ onDone }: Props) {
   const [error, setError] = useState<string>("");
 
   const isKeywordSource = portal === "linkedin" || portal === "indeed";
-  const isBoardSource = portal === "greenhouse" || portal === "lever" || portal === "ashby";
+  // const isBoardSource = portal === "greenhouse" || portal === "lever" || portal === "ashby";
 
   async function fetchNow() {
     setBusy(true);
     setError("");
     setResult("");
     try {
-      if (portal === "all") {
-        const r = await api.ingestAll({
-          hours: hours ? Number(hours) : undefined,
-        });
-        setResult(
-          `Scanned ${r.totalCompanies} sources · ${r.totalJobs} postings · ${r.kept} within window · ${r.inserted} saved.`
-        );
-      } else if (isBoardSource) {
-        // For a single company slug, use /api/ingest
-        const r = await api.ingest({
-          source: portal,
-          query: keywords.trim(), // company slug typed in keywords box
-          pages,
-        });
-        setResult(`Inserted ${r.inserted} of ${r.total} from ${portal} (${keywords}).`);
-      } else {
-        // LinkedIn / Indeed keyword search
-        const r = await api.ingest({
-          source: portal,
-          query: keywords.trim(),
-          location: location.trim() || undefined,
-          pages,
-          // The base /api/ingest doesn't currently take hours, but the
-          // scraper functions respect it via opts.hours at the source level.
-          // We rely on /api/ingest-all for time-windowed bulk, so for single
-          // searches we keep "hours" as a follow-up filter on the Jobs page.
-        } as any);
-        setResult(`Inserted ${r.inserted} of ${r.total} from ${portal}.`);
-      }
+      // LinkedIn-only mode: board / "all" branches commented out.
+      // if (portal === "all") {
+      //   const r = await api.ingestAll({
+      //     hours: hours ? Number(hours) : undefined,
+      //   });
+      //   setResult(
+      //     `Scanned ${r.totalCompanies} sources · ${r.totalJobs} postings · ${r.kept} within window · ${r.inserted} saved.`
+      //   );
+      // } else if (isBoardSource) {
+      //   const r = await api.ingest({
+      //     source: portal,
+      //     query: keywords.trim(),
+      //     pages,
+      //   });
+      //   setResult(`Inserted ${r.inserted} of ${r.total} from ${portal} (${keywords}).`);
+      // } else {
+      // LinkedIn / Indeed keyword search. Forwarding `hours` is what makes
+      // LinkedIn's f_TPR ("posted within") filter actually kick in — without
+      // this, results come back default-sorted and full of stale postings.
+      const r = await api.ingest({
+        source: portal,
+        query: keywords.trim(),
+        location: location.trim() || undefined,
+        pages,
+        hours: hours ? Number(hours) : undefined,
+        easyApplyOnly: portal === "linkedin" ? easyApplyOnly : undefined,
+      });
+      setResult(
+        `Inserted ${r.inserted} of ${r.total} from ${portal}` +
+          (r.purged ? ` · purged ${r.purged} stale.` : ".")
+      );
+      // }
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -100,21 +110,23 @@ export default function FindJobsView({ onDone }: Props) {
 
   function gotoJobs() {
     onDone({
-      source: portal === "all" ? undefined : portal,
+      // LinkedIn-only mode: source always pinned.
+      source: "linkedin",
       hours: hours || undefined,
       q: isKeywordSource ? keywords : undefined,
     });
   }
 
+
   return (
     <>
       <div className="toolbar">
-        <strong>Find jobs</strong>
+        <strong>Find LinkedIn jobs</strong>
         <span style={{ color: "var(--muted)", fontSize: 12 }}>
-          Pick a portal → pick a location → fetch → review.
+          Pick keywords + location → fetch → review.
         </span>
         <div style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
-          {[1, 2, 3].map((n) => (
+          {[1, 2].map((n) => (
             <div
               key={n}
               style={{
@@ -136,54 +148,22 @@ export default function FindJobsView({ onDone }: Props) {
       </div>
 
       <div className="content">
+        {/*
+        LinkedIn-only mode: portal-picker step commented out. To re-enable,
+        restore `step === 1` block, uncomment PORTAL_LABELS entries, and
+        switch the stepper back to 1 | 2 | 3.
+
         {step === 1 && (
           <div className="section" style={{ maxWidth: 720 }}>
             <h4>1. Where do you want to look?</h4>
-            <p style={{ color: "var(--muted)", fontSize: 12, marginTop: 0 }}>
-              Pick a single portal, or scan all curated sources at once.
-            </p>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 }}>
-              {(Object.keys(PORTAL_LABELS) as Portal[]).map((p) => (
-                <label
-                  key={p}
-                  style={{
-                    border: `1px solid ${portal === p ? "var(--accent)" : "var(--border)"}`,
-                    background: portal === p ? "var(--panel-2)" : "transparent",
-                    padding: "10px 12px",
-                    borderRadius: 6,
-                    cursor: "pointer",
-                  }}
-                >
-                  <input
-                    type="radio"
-                    name="portal"
-                    checked={portal === p}
-                    onChange={() => setPortal(p)}
-                    style={{ marginRight: 8 }}
-                  />
-                  <strong>{PORTAL_LABELS[p]}</strong>
-                  <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
-                    {p === "linkedin" && "Public job search · Easy Apply detected"}
-                    {p === "indeed" && "Best with SCRAPER_API_KEY · works partially"}
-                    {p === "greenhouse" && "Public board API · one company at a time"}
-                    {p === "lever" && "Public board API · one company at a time"}
-                    {p === "ashby" && "Public board API · one company at a time"}
-                    {p === "all" && "Curated 70+ companies + LinkedIn keyword searches"}
-                  </div>
-                </label>
-              ))}
-            </div>
-            <div style={{ marginTop: 16 }}>
-              <button className="primary" onClick={() => setStep(2)}>
-                Next →
-              </button>
-            </div>
+            ...
           </div>
         )}
+        */}
 
-        {step === 2 && (
+        {step === 1 && (
           <div className="section" style={{ maxWidth: 720 }}>
-            <h4>2. What and where?</h4>
+            <h4>1. What and where?</h4>
 
             {isKeywordSource && (
               <>
@@ -212,6 +192,9 @@ export default function FindJobsView({ onDone }: Props) {
                     style={{ width: 80 }}
                   />
 
+                  {/*
+                  LinkedIn Easy-Apply toggle hidden in this mode — the Jobs
+                  view exposes the same filter and it's the more useful place.
                   {portal === "linkedin" && (
                     <>
                       <label>Easy Apply only</label>
@@ -225,6 +208,7 @@ export default function FindJobsView({ onDone }: Props) {
                       </label>
                     </>
                   )}
+                  */}
                 </div>
                 <div style={{ marginTop: 12 }}>
                   <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 4 }}>
@@ -248,18 +232,19 @@ export default function FindJobsView({ onDone }: Props) {
               </>
             )}
 
+            {/*
+            Board / "all" branches commented out — LinkedIn-only mode.
+
             {isBoardSource && (
               <>
                 <p style={{ color: "var(--muted)", fontSize: 12 }}>
-                  Enter the company slug from their board URL — e.g. <code>stripe</code> for{" "}
-                  <code>boards.greenhouse.io/stripe</code>.
+                  Enter the company slug from their board URL — e.g. <code>stripe</code>.
                 </p>
                 <div className="form-grid">
                   <label>Company slug</label>
                   <input
                     value={keywords}
                     onChange={(e) => setKeywords(e.target.value)}
-                    placeholder={portal === "greenhouse" ? "airbnb" : portal === "lever" ? "netflix" : "linear"}
                   />
                 </div>
               </>
@@ -267,35 +252,32 @@ export default function FindJobsView({ onDone }: Props) {
 
             {portal === "all" && (
               <p style={{ color: "var(--muted)", fontSize: 13 }}>
-                Will scan every curated company across Greenhouse, Lever, and Ashby, plus all the
-                LinkedIn keyword searches in <code>backend/src/sources/companies.ts</code>. This
-                can take 30-60 seconds.
+                Will scan every curated company across Greenhouse, Lever, and Ashby...
               </p>
             )}
+            */}
 
             <div style={{ marginTop: 16, display: "flex", gap: 8 }}>
-              <button onClick={() => setStep(1)}>← Back</button>
-              <button className="primary" onClick={() => setStep(3)}>
+              <button className="primary" onClick={() => setStep(2)}>
                 Next →
               </button>
             </div>
           </div>
         )}
 
-        {step === 3 && (
+        {step === 2 && (
           <div className="section" style={{ maxWidth: 720 }}>
-            <h4>3. How fresh?</h4>
+            <h4>2. How fresh?</h4>
             <p style={{ color: "var(--muted)", fontSize: 12, marginTop: 0 }}>
-              Time window. Greenhouse/Lever/Ashby use real posted dates; LinkedIn uses its native
-              "posted within" filter; Indeed uses "days ago".
+              Time window. LinkedIn uses its native "posted within" filter.
             </p>
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
               {[
                 { value: "24", label: "Last 24h" },
                 { value: "48", label: "Last 48h" },
-                { value: "168", label: "Last 7 days" },
-                { value: "720", label: "Last 30 days" },
+                { value: "72", label: "Last 3 days" },
+                { value: "120", label: "Last 5 days" },
               ].map((opt) => (
                 <label
                   key={opt.value}
@@ -321,7 +303,7 @@ export default function FindJobsView({ onDone }: Props) {
             </div>
 
             <div style={{ marginTop: 16, display: "flex", gap: 8 }}>
-              <button onClick={() => setStep(2)}>← Back</button>
+              <button onClick={() => setStep(1)}>← Back</button>
               <button className="primary" disabled={busy} onClick={fetchNow}>
                 {busy ? "Fetching..." : "Fetch jobs"}
               </button>

@@ -78,8 +78,15 @@ export const api = {
     req<Job>(`/api/jobs/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   resetScores: () =>
     req<{ cleared: number }>("/api/jobs/reset-scores", { method: "POST" }),
-  ingest: (body: { source: string; query: string; location?: string; pages?: number }) =>
-    req<{ inserted: number; total: number }>("/api/ingest", {
+  ingest: (body: {
+    source: string;
+    query: string;
+    location?: string;
+    pages?: number;
+    hours?: number;
+    easyApplyOnly?: boolean;
+  }) =>
+    req<{ inserted: number; total: number; purged?: number }>("/api/ingest", {
       method: "POST",
       body: JSON.stringify(body),
     }),

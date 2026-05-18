@@ -16,7 +16,7 @@ import {
 import {
   openIndeedJob,
   fillIndeedForm,
-  closeBrowser as closeIndeedBrowser,
+  closeBrowser as closeIndeedApplyBrowser,
 } from "../apply/playwright/indeed.js";
 import path from "node:path";
 import type { NormalizedJob } from "../types.js";
@@ -208,8 +208,9 @@ export async function fillGreenhouseApplication(applicationId: string) {
 }
 
 /**
- * Fill the Indeed application form in the browser. Same UX as LinkedIn:
- * bot fills fields, attaches uploaded resume, stops before submit.
+ * Fill the Indeed SmartApply form. Multi-step wizard; bot fills each step and
+ * clicks Continue, stopping before the final Submit. For external-apply jobs
+ * ("Apply on company site"), the bot just opens the page and returns.
  */
 export async function fillIndeedApplication(applicationId: string) {
   const app = await prisma.application.findUnique({
@@ -225,14 +226,13 @@ export async function fillIndeedApplication(applicationId: string) {
   const profile = await getProfile();
   if (!profile) throw new Error("Profile not set");
 
-  // Resolve resume to an absolute path the browser can attach.
   let resumeAbsPath: string | undefined;
   if (profile.resumeFileUrl) {
     const rel = profile.resumeFileUrl.replace(/^\/files\//, "");
     resumeAbsPath = path.resolve(process.cwd(), "data", rel);
   }
 
-  const result = await fillIndeedForm(
+  return fillIndeedForm(
     applicationId,
     plan.fields,
     profile,
@@ -243,17 +243,12 @@ export async function fillIndeedApplication(applicationId: string) {
     },
     resumeAbsPath
   );
-  return result;
-}
-
-export async function closeIndeedBrowserSession() {
-  await closeIndeedBrowser();
 }
 
 export async function closeAllBrowsers() {
   await closeBrowser();
   await closeGreenhouseBrowser();
-  await closeIndeedBrowser();
+  await closeIndeedApplyBrowser();
 }
 
 export async function getApplicationByJob(jobId: string) {

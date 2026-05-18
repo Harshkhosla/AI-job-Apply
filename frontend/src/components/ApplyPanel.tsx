@@ -19,8 +19,8 @@ export default function ApplyPanel({ job }: { job: Job }) {
   const [withCover, setWithCover] = useState(false);
   const [msg, setMsg] = useState("");
 
-  const supported = ["greenhouse", "lever", "ashby", "linkedin"].includes(job.source);
-  const browserFillable = ["linkedin", "greenhouse"].includes(job.source);
+  const supported = ["greenhouse", "lever", "ashby", "linkedin", "indeed"].includes(job.source);
+  const browserFillable = ["linkedin", "greenhouse", "indeed"].includes(job.source);
   const [filling, setFilling] = useState(false);
 
   async function load() {
@@ -68,7 +68,7 @@ export default function ApplyPanel({ job }: { job: Job }) {
     return (
       <div className="section">
         <p style={{ color: "var(--muted)" }}>
-          Auto-apply is currently supported for Greenhouse, Lever, Ashby, and LinkedIn (Easy Apply only).
+          Auto-apply is currently supported for Greenhouse, Lever, Ashby, LinkedIn (Easy Apply only), and Indeed (SmartApply).
           This job comes from <span className="tag">{job.source}</span> — open the posting
           and apply directly for now.
         </p>

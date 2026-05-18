@@ -98,11 +98,45 @@ export const LINKEDIN_SEARCHES: KeywordSearch[] = [
   { query: "full stack engineer", location: "Remote", pages: 2 },
   { query: "software engineer typescript", location: "Remote", pages: 1 },
 ];
+// Broad Indeed sweep: ~25 keyword/location combinations covering all the role
+// types we hire for, across India tier-1 cities and global Remote. Each
+// search hits Indeed sorted by date so the newest postings always surface.
+// The Playwright context is reused across all searches via a module-level
+// singleton in sources/indeed.ts, so 25 searches != 25 browsers.
 export const INDEED_SEARCHES: KeywordSearch[] = [
+  // Full stack / SDE — India-wide
+  { query: "full stack developer", location: "India", pages: 2 },
+  { query: "full stack engineer", location: "India", pages: 2 },
+  { query: "software development engineer", location: "India", pages: 2 },
+  { query: "software engineer", location: "India", pages: 2 },
+  { query: "SDE", location: "India", pages: 2 },
+
+  // Stack-specific — India-wide
+  { query: "MERN stack developer", location: "India", pages: 2 },
+  { query: "next.js developer", location: "India", pages: 2 },
+  { query: "react developer", location: "India", pages: 2 },
+  { query: "node.js developer", location: "India", pages: 2 },
+  { query: "typescript developer", location: "India", pages: 2 },
+  { query: "javascript developer", location: "India", pages: 1 },
+
+  // Frontend / Backend split — India-wide
+  { query: "frontend engineer", location: "India", pages: 2 },
+  { query: "backend engineer node", location: "India", pages: 2 },
+
+  // AI / ML — India-wide
+  { query: "AI engineer", location: "India", pages: 2 },
+  { query: "machine learning engineer", location: "India", pages: 1 },
+  { query: "LLM engineer", location: "India", pages: 1 },
+  { query: "generative AI engineer", location: "India", pages: 1 },
+
+  // Tier-1 cities (often surface jobs not tagged "India" generally)
   { query: "full stack developer", location: "Bengaluru, Karnataka", pages: 2 },
   { query: "software engineer", location: "Bengaluru, Karnataka", pages: 2 },
-  { query: "react developer", location: "Bengaluru, Karnataka", pages: 1 },
-  { query: "node.js developer", location: "India", pages: 1 },
-  { query: "MERN stack", location: "India", pages: 1 },
-  { query: "frontend developer", location: "Bengaluru, Karnataka", pages: 1 },
+  { query: "react developer", location: "Hyderabad, Telangana", pages: 1 },
+  { query: "full stack engineer", location: "Pune, Maharashtra", pages: 1 },
+  { query: "software engineer", location: "Mumbai, Maharashtra", pages: 1 },
+  { query: "full stack developer", location: "Delhi, India", pages: 1 },
+  { query: "software engineer", location: "Noida, Uttar Pradesh", pages: 1 },
+  { query: "full stack developer", location: "Gurugram, Haryana", pages: 1 },
+  { query: "software engineer", location: "Chennai, Tamil Nadu", pages: 1 },
 ];

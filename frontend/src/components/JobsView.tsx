@@ -13,12 +13,14 @@ export default function JobsView({ preset }: JobsViewProps = {}) {
   const [page, setPage] = useState(1);
   const [pageSize] = useState(25);
   const [selected, setSelected] = useState<Job | null>(null);
+  // LinkedIn-only mode: `source` pinned to "linkedin", default sort flipped
+  // to `postedAt` so "latest first" is the natural ordering.
   const [filters, setFilters] = useState({
     status: "",
-    source: preset?.source ?? "",
+    source: "linkedin",
     minScore: "",
     q: preset?.q ?? "",
-    sort: "score",
+    sort: "postedAt",
     hours: preset?.hours ?? "",
     fit: "",
     easyApply: "",
@@ -54,11 +56,12 @@ export default function JobsView({ preset }: JobsViewProps = {}) {
   }, [filters]);
 
   // If a fresh preset is passed in, apply it.
+  // LinkedIn-only mode: `source` stays pinned regardless of preset.
   useEffect(() => {
     if (!preset) return;
     setFilters((prev) => ({
       ...prev,
-      source: preset.source ?? "",
+      source: "linkedin",
       hours: preset.hours ?? "",
       q: preset.q ?? "",
     }));
@@ -88,6 +91,10 @@ export default function JobsView({ preset }: JobsViewProps = {}) {
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const unscoredOnPage = jobs.filter((j) => j.score == null).length;
+  // Kept around for the (currently commented) bulk-scoring buttons. Touch
+  // these so TS/ESLint don't flag them as unused in LinkedIn-only mode.
+  void unscoredOnPage;
+  void scoreCurrentPage;
 
   return (
     <>
@@ -98,6 +105,11 @@ export default function JobsView({ preset }: JobsViewProps = {}) {
           onChange={(e) => setFilters({ ...filters, q: e.target.value })}
           style={{ minWidth: 220 }}
         />
+        {/*
+        LinkedIn-only mode: status / source / min-score filters hidden.
+        Re-enable by uncommenting and removing the pinned `source` in the
+        initial filters state above.
+
         <select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}>
           <option value="">Active (default)</option>
           <option value="new">New</option>
@@ -120,6 +132,7 @@ export default function JobsView({ preset }: JobsViewProps = {}) {
           <option value="75">≥ 75</option>
           <option value="85">≥ 85</option>
         </select>
+        */}
         <button
           className={filters.fit ? "primary" : ""}
           onClick={() => setFilters({ ...filters, fit: filters.fit ? "" : "me" })}
@@ -137,11 +150,11 @@ export default function JobsView({ preset }: JobsViewProps = {}) {
           {filters.easyApply ? "✓ Easy Apply only" : "Easy Apply only"}
         </button>
         <select value={filters.hours} onChange={(e) => setFilters({ ...filters, hours: e.target.value })}>
-          <option value="">Any time</option>
+          <option value="">Any time (≤5d)</option>
           <option value="24">Last 24h</option>
           <option value="48">Last 48h</option>
-          <option value="168">Last 7d</option>
-          <option value="720">Last 30d</option>
+          <option value="72">Last 3d</option>
+          <option value="120">Last 5d</option>
         </select>
         <select value={filters.sort} onChange={(e) => setFilters({ ...filters, sort: e.target.value })}>
           <option value="score">Sort: Score</option>
@@ -151,6 +164,10 @@ export default function JobsView({ preset }: JobsViewProps = {}) {
         <button onClick={() => load(page)} disabled={loading}>
           {loading ? "Loading…" : "Refresh"}
         </button>
+        {/*
+        LinkedIn-only mode: bulk scoring controls hidden. The per-job
+        `Score` button inside JobDetail is still available.
+
         <button
           className="primary"
           onClick={() => scoreCurrentPage(true)}
@@ -176,6 +193,7 @@ export default function JobsView({ preset }: JobsViewProps = {}) {
         >
           Clear scores
         </button>
+        */}
         <button
           className="primary"
           onClick={() => setBatchModal(true)}
@@ -261,6 +279,24 @@ export default function JobsView({ preset }: JobsViewProps = {}) {
   );
 }
 
+function timeAgo(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return "";
+  const diffMs = Date.now() - then;
+  if (diffMs < 0) return "just now";
+  const mins = Math.floor(diffMs / 60_000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months}mo ago`;
+  return `${Math.floor(months / 12)}y ago`;
+}
+
 function JobRow({
   job,
   selected,
@@ -276,6 +312,10 @@ function JobRow({
 }) {
   const scoreClass =
     job.score == null ? "" : job.score >= 80 ? "score-high" : job.score >= 60 ? "score-mid" : "score-low";
+  // Prefer the real posted date; fall back to when we fetched it.
+  const ageSource = job.postedAt ?? job.fetchedAt;
+  const age = timeAgo(ageSource);
+  const isFallback = !job.postedAt;
   return (
     <div className={`job-row ${selected ? "selected" : ""}`} onClick={onClick}>
       <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
@@ -299,6 +339,23 @@ function JobRow({
                 style={{ background: "rgba(79, 156, 249, 0.18)", color: "var(--accent)", marginLeft: 6 }}
               >
                 Easy Apply
+              </span>
+            )}
+            {age && (
+              <span
+                style={{
+                  marginLeft: 8,
+                  fontSize: 11,
+                  color: "var(--muted)",
+                  fontWeight: 400,
+                }}
+                title={
+                  isFallback
+                    ? `Fetched ${new Date(ageSource!).toLocaleString()} (no posted date)`
+                    : `Posted ${new Date(ageSource!).toLocaleString()}`
+                }
+              >
+                {isFallback ? `~${age}` : age}
               </span>
             )}
           </div>

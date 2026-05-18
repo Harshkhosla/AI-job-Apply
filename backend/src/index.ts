@@ -13,6 +13,7 @@ import multer from "multer";
 import fs from "node:fs";
 import { prisma } from "./db.js";
 import { ingest, ingestAll } from "./services/ingest.js";
+import { closeIndeedBrowser } from "./sources/indeed.js";
 import { getProfile, upsertProfile } from "./services/profile.js";
 import {
   scoreJobById,
@@ -31,7 +32,6 @@ import {
   fillGreenhouseApplication,
   fillIndeedApplication,
   closeLinkedInBrowser,
-  closeIndeedBrowserSession,
 } from "./services/applications.js";
 import {
   startBatch,
@@ -188,12 +188,48 @@ app.post("/api/jobs/reset-scores", async (_req, res) => {
 });
 
 // ---------- Ingestion ----------
+// Hard freshness cap. Override with MAX_JOB_AGE_DAYS env var.
+const MAX_JOB_AGE_DAYS = Math.max(1, Number(process.env.MAX_JOB_AGE_DAYS ?? 5));
+
+async function purgeStaleJobs(): Promise<number> {
+  const cutoff = new Date(Date.now() - MAX_JOB_AGE_DAYS * 24 * 60 * 60 * 1000);
+  // Drop jobs whose posted date (or fetched date, when posted is unknown) is
+  // older than the cutoff. Preserve rows the user has acted on so the
+  // pipeline history stays intact.
+  try {
+    const r = await prisma.job.deleteMany({
+      where: {
+        status: { notIn: ["applied", "shortlisted"] },
+        OR: [
+          { postedAt: { lt: cutoff } },
+          { AND: [{ postedAt: null }, { fetchedAt: { lt: cutoff } }] },
+        ],
+      },
+    });
+    return r.count;
+  } catch {
+    return 0;
+  }
+}
+
 app.post("/api/ingest", async (req, res) => {
   try {
-    const { source, query, location, pages } = req.body ?? {};
+    const { source, query, location, pages, hours, easyApplyOnly } = req.body ?? {};
     if (!source || !query) return res.status(400).json({ error: "source and query required" });
-    const result = await ingest({ source, query, location, pages });
-    res.json(result);
+    // Cap the requested time window at MAX_JOB_AGE_DAYS so the scraper never
+    // asks LinkedIn for older postings.
+    const maxHours = MAX_JOB_AGE_DAYS * 24;
+    const withinHours = Math.min(hours ? Number(hours) : maxHours, maxHours);
+    const result = await ingest({
+      source,
+      query,
+      location,
+      pages,
+      withinHours,
+      easyApplyOnly: !!easyApplyOnly,
+    });
+    const purged = await purgeStaleJobs();
+    res.json({ ...result, purged });
   } catch (e: any) {
     res.status(500).json({ error: e?.message ?? String(e) });
   }
@@ -380,6 +416,11 @@ app.post("/api/linkedin/close", async (_req, res) => {
   res.json({ ok: true });
 });
 
+app.post("/api/indeed/close", async (_req, res) => {
+  await closeIndeedBrowser();
+  res.json({ ok: true });
+});
+
 // Batch apply
 app.post("/api/batch", async (req, res) => {
   try {
@@ -411,8 +452,6 @@ app.get("/api/batch", (_req, res) => {
 });
 
 // ---------- Indeed ----------
-import { loginToIndeed, closeIndeedScraper } from "./sources/indeed.js";
-
 // Indeed: push field-plan values into the live Indeed Apply modal
 app.post("/api/applications/:id/fill-indeed", async (req, res) => {
   try {
@@ -423,24 +462,21 @@ app.post("/api/applications/:id/fill-indeed", async (req, res) => {
   }
 });
 
-// Indeed login - opens browser for user to log in
-app.post("/api/indeed/login", async (_req, res) => {
-  try {
-    const success = await loginToIndeed();
-    res.json({ ok: success });
-  } catch (e: any) {
-    res.status(500).json({ error: e?.message ?? String(e) });
-  }
-});
-
 // Close Indeed browser
 app.post("/api/indeed/close", async (_req, res) => {
-  await closeIndeedBrowserSession();
-  await closeIndeedScraper();
+  await closeIndeedBrowser();
   res.json({ ok: true });
 });
 
 const port = Number(process.env.PORT ?? 4000);
 app.listen(port, () => {
   console.log(`[backend] listening on http://localhost:${port}`);
+  // Run an initial purge so stale rows from before this cap was added don't
+  // linger, then sweep periodically.
+  purgeStaleJobs()
+    .then((n) => n && console.log(`[backend] purged ${n} stale jobs (> ${MAX_JOB_AGE_DAYS}d)`))
+    .catch(() => {});
+  setInterval(() => {
+    purgeStaleJobs().catch(() => {});
+  }, 6 * 60 * 60 * 1000).unref();
 });

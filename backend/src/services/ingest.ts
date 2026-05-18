@@ -4,7 +4,7 @@ import { fetchGreenhouse } from "../sources/greenhouse.js";
 import { fetchLever } from "../sources/lever.js";
 import { fetchAshby } from "../sources/ashby.js";
 import { fetchLinkedIn, fetchLinkedInJobDetail } from "../sources/linkedin.js";
-import { fetchIndeed, fetchIndeedJobDetail } from "../sources/indeed.js";
+import { fetchIndeed } from "../sources/indeed.js";
 import {
   GREENHOUSE_COMPANIES,
   LEVER_COMPANIES,
@@ -13,6 +13,12 @@ import {
   INDEED_SEARCHES,
   type KeywordSearch,
 } from "../sources/companies.js";
+
+// Hard freshness cap shared with the API layer. Override via env.
+const MAX_JOB_AGE_DAYS = Math.max(1, Number(process.env.MAX_JOB_AGE_DAYS ?? 5));
+function freshnessCutoff(): Date {
+  return new Date(Date.now() - MAX_JOB_AGE_DAYS * 24 * 60 * 60 * 1000);
+}
 
 export interface IngestRequest {
   source: JobSource;
@@ -68,22 +74,14 @@ export async function ingest(req: IngestRequest): Promise<{ inserted: number; to
           req.pages ?? 1,
           req.withinHours
         );
-        // hydrate descriptions (best-effort)
-        for (const j of jobs) {
-          if (!j.description) {
-            try {
-              j.description = await fetchIndeedJobDetail(j.sourceJobId);
-              await new Promise((r) => setTimeout(r, 800));
-            } catch {
-              // ignore
-            }
-          }
-        }
         break;
     }
 
+    // Drop anything older than the freshness cap before we touch the DB.
+    const cutoff = freshnessCutoff();
+    const fresh = jobs.filter((j) => !j.postedAt || j.postedAt >= cutoff);
     let inserted = 0;
-    for (const j of jobs) {
+    for (const j of fresh) {
       try {
         await prisma.job.upsert({
           where: { source_sourceJobId: { source: j.source, sourceJobId: j.sourceJobId } },
@@ -154,7 +152,17 @@ export interface IngestAllResult {
 export async function ingestAll(opts: IngestAllOptions = {}): Promise<IngestAllResult> {
   const sources = opts.sources ?? ["greenhouse", "lever", "ashby", "linkedin", "indeed"];
   const concurrency = Math.max(1, opts.concurrency ?? 4);
-  const cutoff = opts.hours ? new Date(Date.now() - opts.hours * 60 * 60 * 1000) : null;
+  // Honour the caller's window if provided, but never look further back than
+  // the global freshness cap.
+  const hardCutoff = freshnessCutoff();
+  const cutoff = opts.hours
+    ? new Date(
+        Math.max(
+          Date.now() - opts.hours * 60 * 60 * 1000,
+          hardCutoff.getTime()
+        )
+      )
+    : hardCutoff;
 
   type Task =
     | { kind: "board"; source: "greenhouse" | "lever" | "ashby"; company: string }

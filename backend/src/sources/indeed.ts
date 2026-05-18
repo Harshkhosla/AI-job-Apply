@@ -1,152 +1,152 @@
-import { chromium, type BrowserContext, type Page } from "playwright";
 import path from "node:path";
 import fs from "node:fs";
+import { chromium, type BrowserContext } from "playwright";
 import type { NormalizedJob } from "../types.js";
 
-// Persistent browser profile for Indeed scraping - stores cookies/session
-const PROFILE_DIR = path.resolve(process.cwd(), "data", "playwright", "indeed-scrape-profile");
-let _context: BrowserContext | null = null;
+/**
+ * Indeed scraper backed by a persistent Playwright Chromium session.
+ *
+ * Why Playwright instead of plain fetch+cheerio: Indeed aggressively serves
+ * Cloudflare challenges and bot-detection HTML to non-browser clients, so
+ * a real Chromium with a persistent profile is far more reliable.
+ *
+ * The profile lives at backend/data/playwright/indeed-profile, separate from
+ * greenhouse-profile and chrome-profile (LinkedIn) so cookies don't collide.
+ *
+ * Tunables (env vars):
+ *   INDEED_HEADLESS=1   run without a visible window
+ */
+const PROFILE_DIR = path.resolve(process.cwd(), "data", "playwright", "indeed-profile");
+
+let _ctx: BrowserContext | null = null;
 
 /**
- * Launch a stealth browser context that bypasses bot detection.
- * Runs in VISIBLE mode by default for debugging - set INDEED_HEADLESS=1 to hide.
+ * Shared persistent Chromium context for Indeed. Used by both the scraper and
+ * the apply bot so they reuse cookies / login state.
+ *
+ * Defaults to headless. Set INDEED_HEADLESS=0 to show the window (useful when
+ * you need to solve a Cloudflare challenge or sign in to Indeed).
  */
-async function getScraperContext(): Promise<BrowserContext> {
-  if (_context) return _context;
+export async function getIndeedContext(): Promise<BrowserContext> {
+  if (_ctx) return _ctx;
   fs.mkdirSync(PROFILE_DIR, { recursive: true });
-
-  // Default to visible browser for debugging Indeed's anti-bot measures
-  const headless = process.env.INDEED_HEADLESS === "1";
-  console.log(`[indeed] Launching browser (headless: ${headless})...`);
-
-  _context = await chromium.launchPersistentContext(PROFILE_DIR, {
+  const headless = process.env.INDEED_HEADLESS !== "0";
+  _ctx = await chromium.launchPersistentContext(PROFILE_DIR, {
     headless,
-    slowMo: 50,
-    viewport: { width: 1366, height: 768 },
+    slowMo: 30,
+    viewport: { width: 1280, height: 900 },
     args: [
       "--disable-blink-features=AutomationControlled",
       "--disable-features=IsolateOrigins,site-per-process",
-      "--disable-web-security",
       "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-      "--disable-accelerated-2d-canvas",
-      "--disable-gpu",
+      "--disable-web-security",
+      "--lang=en-IN,en-US,en",
     ],
     userAgent:
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.6533.100 Safari/537.36",
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
     locale: "en-IN",
     timezoneId: "Asia/Kolkata",
-    geolocation: { latitude: 12.9716, longitude: 77.5946 }, // Bangalore
-    permissions: ["geolocation"],
+    extraHTTPHeaders: {
+      "Accept-Language": "en-IN,en-US;q=0.9,en;q=0.8",
+    },
   });
 
-  // Apply stealth scripts to evade detection
-  _context.addInitScript(() => {
-    // Override webdriver property
-    Object.defineProperty(navigator, 'webdriver', { get: () => false });
-    
-    // Override plugins
-    Object.defineProperty(navigator, 'plugins', {
-      get: () => [1, 2, 3, 4, 5],
+  // Stealth: hide every signal Indeed/Cloudflare uses to detect headless
+  // Chromium. This is the minimum set that gets us past the bot wall.
+  await _ctx.addInitScript(() => {
+    // 1. navigator.webdriver -> undefined
+    Object.defineProperty(Navigator.prototype, "webdriver", {
+      get: () => undefined,
+      configurable: true,
     });
-    
-    // Override languages
-    Object.defineProperty(navigator, 'languages', {
-      get: () => ['en-US', 'en', 'hi'],
+    // 2. plugins / mimeTypes — headless has zero by default
+    const fakePlugins = [
+      { name: "Chrome PDF Plugin", filename: "internal-pdf-viewer", description: "Portable Document Format" },
+      { name: "Chrome PDF Viewer", filename: "mhjfbmdgcfjbbpaeojofohoefgiehjai", description: "" },
+      { name: "Native Client", filename: "internal-nacl-plugin", description: "" },
+    ];
+    Object.defineProperty(navigator, "plugins", {
+      get: () => fakePlugins,
+      configurable: true,
     });
-    
-    // Mock chrome runtime
-    (window as any).chrome = { runtime: {} };
-  });
-
-  return _context;
-}
-
-export async function closeIndeedScraper(): Promise<void> {
-  if (_context) await _context.close().catch(() => undefined);
-  _context = null;
-}
-
-/**
- * Simulate human-like scrolling behavior
- */
-async function humanScroll(page: Page): Promise<void> {
-  const scrollHeight = await page.evaluate(() => document.body.scrollHeight);
-  let currentPosition = 0;
-  
-  while (currentPosition < scrollHeight * 0.7) {
-    const scrollStep = 200 + Math.random() * 300;
-    currentPosition += scrollStep;
-    await page.evaluate((y) => window.scrollTo({ top: y, behavior: 'smooth' }), currentPosition);
-    await page.waitForTimeout(100 + Math.random() * 200);
-  }
-  
-  // Scroll back up a bit (human behavior)
-  await page.evaluate(() => window.scrollTo({ top: 200, behavior: 'smooth' }));
-  await page.waitForTimeout(300);
-}
-
-/**
- * Handle CAPTCHA or verification pages - waits for user to solve manually
- */
-async function handleVerification(page: Page): Promise<boolean> {
-  const isCaptcha = await page.evaluate(() => {
-    const text = document.body.innerText.toLowerCase();
-    return text.includes('verify you are human') || 
-           text.includes('captcha') ||
-           text.includes('unusual traffic') ||
-           document.querySelector('iframe[src*="captcha"]') !== null ||
-           document.querySelector('#px-captcha') !== null;
-  });
-
-  if (isCaptcha) {
-    console.log("[indeed] ⚠️ CAPTCHA detected! Please solve it in the browser window...");
-    console.log("[indeed] Waiting up to 2 minutes for manual verification...");
-    
-    try {
-      await page.waitForFunction(() => {
-        const text = document.body.innerText.toLowerCase();
-        return !text.includes('verify you are human') && 
-               !text.includes('captcha') &&
-               document.querySelector('.job_seen_beacon, .jobsearch-ResultsList') !== null;
-      }, { timeout: 120000 });
-      
-      console.log("[indeed] ✓ Verification complete!");
-      return true;
-    } catch {
-      console.log("[indeed] ✗ Verification timeout");
-      return false;
+    Object.defineProperty(navigator, "mimeTypes", {
+      get: () => [{ type: "application/pdf", suffixes: "pdf", description: "" }],
+      configurable: true,
+    });
+    // 3. languages
+    Object.defineProperty(navigator, "languages", {
+      get: () => ["en-IN", "en-US", "en"],
+      configurable: true,
+    });
+    // 4. window.chrome stub (only present in real Chrome)
+    (window as any).chrome = (window as any).chrome || {
+      runtime: {},
+      app: { isInstalled: false },
+      csi: () => undefined,
+      loadTimes: () => undefined,
+    };
+    // 5. Permissions API consistency
+    const origQuery = (window.navigator.permissions as any)?.query;
+    if (origQuery) {
+      (window.navigator.permissions as any).query = (params: any) =>
+        params?.name === "notifications"
+          ? Promise.resolve({ state: Notification.permission })
+          : origQuery(params);
     }
-  }
-  return true;
+    // 6. WebGL vendor — headless reports "SwiftShader"; spoof to Intel.
+    const proto = (WebGLRenderingContext as any)?.prototype;
+    if (proto?.getParameter) {
+      const orig = proto.getParameter;
+      proto.getParameter = function (p: number) {
+        if (p === 37445) return "Intel Inc."; // UNMASKED_VENDOR_WEBGL
+        if (p === 37446) return "Intel Iris OpenGL Engine"; // UNMASKED_RENDERER_WEBGL
+        return orig.call(this, p);
+      };
+    }
+  });
+
+  return _ctx;
 }
 
-/**
- * Get the correct Indeed domain based on location
- */
-function getIndeedDomain(location: string): string {
-  const loc = location.toLowerCase();
-  if (loc.includes("india") || loc.includes("bengaluru") || loc.includes("bangalore") || 
-      loc.includes("mumbai") || loc.includes("delhi") || loc.includes("hyderabad") ||
-      loc.includes("chennai") || loc.includes("pune") || loc.includes("kolkata")) {
+export async function closeIndeedBrowser(): Promise<void> {
+  if (_ctx) await _ctx.close().catch(() => undefined);
+  _ctx = null;
+}
+
+/** Parse Indeed's relative "posted" strings into a real Date. */
+function parsePostedAt(raw: string | undefined | null): Date | undefined {
+  if (!raw) return undefined;
+  const s = raw.toLowerCase().replace(/^posted\s*/i, "").trim();
+  if (!s) return undefined;
+  if (/^(just posted|today|active today)/.test(s)) return new Date();
+  const m = s.match(/(\d+)\s*\+?\s*(minute|hour|day|week|month)/);
+  if (!m) return undefined;
+  const n = parseInt(m[1], 10);
+  const unit = m[2];
+  const now = Date.now();
+  const ms =
+    unit === "minute" ? n * 60_000 :
+    unit === "hour" ? n * 3_600_000 :
+    unit === "day" ? n * 86_400_000 :
+    unit === "week" ? n * 7 * 86_400_000 :
+    unit === "month" ? n * 30 * 86_400_000 :
+    0;
+  return new Date(now - ms);
+}
+
+function pickHost(location: string): string {
+  const l = location.toLowerCase().trim();
+  // Use the India domain for India-based searches so we get INR / IST listings;
+  // fall back to .com for Remote and everything else.
+  if (!l || l === "remote") return "https://www.indeed.com";
+  if (/\bindia\b|bengaluru|bangalore|hyderabad|pune|mumbai|delhi|noida|gurgaon|gurugram|chennai|kolkata|ahmedabad/.test(l))
     return "https://in.indeed.com";
-  }
-  if (loc.includes("uk") || loc.includes("london")) return "https://uk.indeed.com";
-  if (loc.includes("canada")) return "https://ca.indeed.com";
-  if (loc.includes("australia")) return "https://au.indeed.com";
   return "https://www.indeed.com";
 }
 
 /**
- * Indeed scraper using Playwright to bypass bot detection.
- * Features:
- * - Stealth mode to evade detection
- * - Human-like scrolling behavior
- * - CAPTCHA handling (waits for manual solve)
- * - Persistent session/cookies
- * - Multi-region support (India, US, UK, etc.)
- * - Robust selectors with fallbacks
+ * Search Indeed for jobs matching the query+location. Always sorts by date
+ * (newest first); applies `fromage` (days) if `withinHours` is provided.
  */
 export async function fetchIndeed(
   query: string,
@@ -155,369 +155,198 @@ export async function fetchIndeed(
   withinHours?: number
 ): Promise<NormalizedJob[]> {
   const jobs: NormalizedJob[] = [];
-  const ctx = await getScraperContext();
-  const page = ctx.pages()[0] || await ctx.newPage();
-  await page.bringToFront();
+  const host = pickHost(location);
+  const isRemote = location.toLowerCase().trim() === "remote";
 
-  // Indeed supports a "days ago" filter: fromage=N (rounded up from hours)
-  const fromage = withinHours ? `&fromage=${Math.max(1, Math.ceil(withinHours / 24))}` : "";
-  const baseUrl = getIndeedDomain(location);
+  const fromageDays = withinHours ? Math.max(1, Math.ceil(withinHours / 24)) : undefined;
 
-  console.log(`[indeed] Starting scrape - Query: "${query}", Location: "${location}", Pages: ${pages}`);
-  console.log(`[indeed] Using domain: ${baseUrl}`);
+let ctx = await getIndeedContext();
+  let existing = ctx.pages();
+  let currentPage = existing.length > 0 ? existing[existing.length - 1] : await ctx.newPage();
 
-  // First, go to Indeed homepage to establish session
-  try {
-    await page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
-    await page.waitForTimeout(2000);
-    
-    // Handle cookie consent
-    const cookieBtn = page.locator('#onetrust-accept-btn-handler, button:has-text("Accept")').first();
-    if (await cookieBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await cookieBtn.click();
-      await page.waitForTimeout(500);
-    }
-  } catch (e) {
-    console.log("[indeed] Failed to load homepage, continuing anyway...");
-  }
+  for (let p = 0; p < pages; p++) {
+    const start = p * 10;
+    const params = new URLSearchParams();
+    params.set("q", query);
+    if (!isRemote) params.set("l", location);
+    if (isRemote) params.set("remotejob", "1");
+    params.set("sort", "date");
+    if (fromageDays !== undefined) params.set("fromage", String(fromageDays));
+    if (start > 0) params.set("start", String(start));
+    const url = `${host}/jobs?${params.toString()}`;
 
-  for (let pageNum = 0; pageNum < pages; pageNum++) {
-    const start = pageNum * 10;
-    const indeedUrl =
-      `${baseUrl}/jobs?q=${encodeURIComponent(query)}` +
-      `&l=${encodeURIComponent(location)}&start=${start}${fromage}`;
-
-    console.log(`[indeed] Page ${pageNum + 1}: ${indeedUrl}`);
-    
+    console.log(`[indeed] page ${p + 1}/${pages} → ${url}`);
     try {
-      // Navigate with retry logic
-      let navSuccess = false;
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          await page.goto(indeedUrl, { waitUntil: "domcontentloaded", timeout: 45000 });
-          navSuccess = true;
-          break;
-        } catch (e) {
-          console.log(`[indeed] Navigation attempt ${attempt + 1} failed, retrying...`);
-          await page.waitForTimeout(2000);
-        }
-      }
-      if (!navSuccess) throw new Error("Navigation failed after 3 attempts");
-
-      await page.waitForTimeout(1500 + Math.random() * 1000);
-
-      // Handle cookie consent popup
-      try {
-        const cookieSelectors = [
-          '#onetrust-accept-btn-handler',
-          'button:has-text("Accept")',
-          'button:has-text("Accept All")',
-          'button:has-text("I agree")',
-          '[data-testid="cookie-accept"]',
-        ];
-        for (const sel of cookieSelectors) {
-          const btn = page.locator(sel).first();
-          if (await btn.isVisible({ timeout: 1000 })) {
-            await btn.click();
-            await page.waitForTimeout(500);
-            break;
-          }
-        }
-      } catch {
-        // No cookie banner
-      }
-
-      // Check for CAPTCHA/verification
-      const verified = await handleVerification(page);
-      if (!verified) {
-        console.log("[indeed] Skipping page due to verification failure");
-        continue;
-      }
-
-      // Wait for job cards with multiple selector fallbacks
-      const cardSelectors = [
-        '.job_seen_beacon',
-        '.jobsearch-ResultsList li',
-        '[data-testid="jobListing"]',
-        '.mosaic-zone',
-        '#mosaic-jobResults',
-      ];
-      
-      let foundCards = false;
-      for (const sel of cardSelectors) {
-        try {
-          await page.waitForSelector(sel, { timeout: 5000 });
-          foundCards = true;
-          break;
-        } catch {
-          continue;
-        }
-      }
-
-      if (!foundCards) {
-        console.log("[indeed] No job cards found on this page - trying alternative extraction...");
-        // Take screenshot for debugging
-        const screenshotPath = path.join(PROFILE_DIR, "..", `indeed-debug-${Date.now()}.png`);
-        await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => {});
-        console.log(`[indeed] Debug screenshot saved: ${screenshotPath}`);
-        
-        // Print page content for debugging
-        const pageText = await page.evaluate(() => document.body.innerText.slice(0, 500));
-        console.log(`[indeed] Page content preview: ${pageText}`);
-        
-        // Try waiting longer and scrolling
-        await page.waitForTimeout(3000);
-        await humanScroll(page);
-      }
-
-      // Human-like scrolling to load lazy content
-      await humanScroll(page);
-      await page.waitForTimeout(1000);
-
-      // Extract job cards with comprehensive selectors
-      const pageJobs = await page.evaluate((baseUrlArg: string) => {
-        const results: any[] = [];
-        const seen = new Set<string>();
-        
-        // Method 1: Find all job cards by looking for job links
-        // Indeed uses different structures for different regions, so we try multiple approaches
-        
-        // Approach A: Find cards with data-jk attribute (most reliable)
-        document.querySelectorAll('[data-jk]').forEach((el) => {
-          const jk = el.getAttribute('data-jk');
-          if (!jk || seen.has(jk)) return;
-          seen.add(jk);
-          
-          const card = el.closest('.job_seen_beacon, .resultContent, li, .slider_item') || el;
-          
-          // Extract title
-          let title = '';
-          const titleEl = card.querySelector('h2 span, .jobTitle span, a[data-jk] span, [data-testid="job-title"]');
-          title = titleEl?.textContent?.trim() || titleEl?.getAttribute('title') || '';
-          
-          // Extract company
-          let company = '';
-          const companyEl = card.querySelector('[data-testid="company-name"], .companyName, .company');
-          company = companyEl?.textContent?.trim() || 'Unknown';
-          
-          // Extract location  
-          let loc = '';
-          const locEl = card.querySelector('[data-testid="text-location"], .companyLocation, .location');
-          loc = locEl?.textContent?.trim() || '';
-          
-          // Check easy apply
-          const easyApply = card.textContent?.toLowerCase().includes('easily apply') || false;
-          
-          if (title) {
-            results.push({ jk, title, company, location: loc, easyApply, remote: loc.toLowerCase().includes('remote') });
-          }
-        });
-        
-        // Approach B: Find all links that point to viewjob
-        if (results.length === 0) {
-          document.querySelectorAll('a[href*="/viewjob"], a[href*="jk="]').forEach((link) => {
-            const href = link.getAttribute('href') || '';
-            const match = href.match(/jk=([a-f0-9]+)/i);
-            const jk = match?.[1];
-            
-            if (!jk || seen.has(jk)) return;
-            seen.add(jk);
-            
-            // Get the parent card
-            const card = link.closest('li, .job_seen_beacon, .resultContent, div[class*="job"]') || link.parentElement;
-            
-            // Title from the link itself
-            let title = link.textContent?.trim()?.split('\n')[0] || '';
-            if (title.length < 3) {
-              const span = link.querySelector('span');
-              title = span?.textContent?.trim() || span?.getAttribute('title') || '';
-            }
-            
-            // Company and location from siblings
-            let company = 'Unknown';
-            let loc = '';
-            if (card) {
-              const companyEl = card.querySelector('.companyName, [data-testid="company-name"], .company');
-              company = companyEl?.textContent?.trim() || 'Unknown';
-              
-              const locEl = card.querySelector('.companyLocation, [data-testid="text-location"], .location');
-              loc = locEl?.textContent?.trim() || '';
-            }
-            
-            const easyApply = card?.textContent?.toLowerCase().includes('easily apply') || false;
-            
-            if (title && title.length > 3 && !title.toLowerCase().includes('apply') && !title.toLowerCase().includes('save')) {
-              results.push({ jk, title: title.slice(0, 100), company, location: loc, easyApply, remote: loc.toLowerCase().includes('remote') });
-            }
-          });
-        }
-        
-        // Approach C: For Indeed India - look for mosaic structure
-        if (results.length === 0) {
-          document.querySelectorAll('.mosaic-zone li, #mosaic-jobResults li, .jobsearch-ResultsList li').forEach((li, idx) => {
-            const link = li.querySelector('a[href*="jk="], a[href*="/viewjob"]') as HTMLAnchorElement;
-            if (!link) return;
-            
-            const href = link.href || link.getAttribute('href') || '';
-            const match = href.match(/jk=([a-f0-9]+)/i);
-            const jk = match?.[1] || `temp_${idx}`;
-            
-            if (seen.has(jk)) return;
-            seen.add(jk);
-            
-            const titleEl = li.querySelector('h2, .jobTitle, [class*="title"]');
-            const title = titleEl?.textContent?.trim() || link.textContent?.trim()?.split('\n')[0] || '';
-            
-            const companyEl = li.querySelector('.companyName, [class*="company"]');
-            const company = companyEl?.textContent?.trim() || 'Unknown';
-            
-            const locEl = li.querySelector('.companyLocation, [class*="location"]');
-            const loc = locEl?.textContent?.trim() || '';
-            
-            if (title && title.length > 3) {
-              results.push({ jk, title: title.slice(0, 100), company, location: loc, easyApply: false, remote: loc.toLowerCase().includes('remote') });
-            }
-          });
-        }
-        
-        return results;
-      }, baseUrl);
-
-      console.log(`[indeed] Page ${pageNum + 1}: extracted ${pageJobs.length} jobs`);
-
-      // Add to results avoiding duplicates
-      for (const j of pageJobs) {
-        if (jobs.some(existing => existing.sourceJobId === j.jk)) continue;
-        
-        jobs.push({
-          source: "indeed",
-          sourceJobId: j.jk,
-          url: `${baseUrl}/viewjob?jk=${j.jk}`,
-          company: j.company,
-          title: j.title,
-          location: j.location,
-          remote: j.remote,
-          easyApply: j.easyApply,
-          employmentType: j.employmentType || undefined,
-          description: "", // Hydrated separately
-        });
-      }
-
-      // Random delay between pages (human-like)
-      const delay = 2000 + Math.random() * 2000;
-      console.log(`[indeed] Waiting ${Math.round(delay / 1000)}s before next page...`);
-      await page.waitForTimeout(delay);
-
+      await currentPage.goto(url, { waitUntil: "domcontentloaded", timeout: 45_000 });
     } catch (e: any) {
-      console.log(`[indeed] Error on page ${pageNum + 1}: ${e?.message}`);
-      // Take debug screenshot
-      const screenshotPath = path.join(PROFILE_DIR, "..", `indeed-error-${Date.now()}.png`);
-      await page.screenshot({ path: screenshotPath, fullPage: false }).catch(() => {});
-      
-      // Continue to next page instead of breaking
-      await page.waitForTimeout(3000);
+      console.warn(`[indeed] navigation failed: ${e?.message ?? e}`);
+      break;
     }
+
+    // Auto-escalate from headless → headed if we hit a Cloudflare wall.
+    if (await isBlocked(currentPage)) {
+      const isHeadless = process.env.INDEED_HEADLESS !== "0";
+      if (isHeadless) {
+        console.warn(
+          "[indeed] Cloudflare wall detected in headless mode — restarting Chromium visibly so you can solve it once."
+        );
+        await closeIndeedBrowser();
+        process.env.INDEED_HEADLESS = "0";
+        ctx = await getIndeedContext();
+        existing = ctx.pages();
+        currentPage = existing.length > 0 ? existing[existing.length - 1] : await ctx.newPage();
+        await currentPage.goto(url, { waitUntil: "domcontentloaded", timeout: 45_000 }).catch(() => undefined);
+      }
+      console.warn(
+        "[indeed] Solve the challenge in the visible window. Waiting up to 180s..."
+      );
+      await currentPage
+        .waitForSelector(
+          "a[href*='/viewjob?'], a[href*='/rc/clk?'], div.job_seen_beacon, [data-testid='slider_item']",
+          { timeout: 180_000 }
+        )
+        .catch(() => undefined);
+    }
+
+    // Wait for the results list to be populated. Indeed hydrates cards via JS,
+    // so domcontentloaded isn't enough — wait for at least one job anchor.
+    await currentPage
+      .waitForSelector(
+        "a[href*='/viewjob?'], a[href*='/rc/clk?'], div.job_seen_beacon, [data-testid='slider_item']",
+        { timeout: 25_000 }
+      )
+      .catch(() => undefined);
+    await currentPage.waitForLoadState("networkidle", { timeout: 8_000 }).catch(() => undefined);
+    await currentPage.waitForTimeout(800);
+
+    const cards = await extractCards(currentPage);
+    console.log(`[indeed] page ${p + 1}: extracted ${cards.length} cards`);
+    if (cards.length === 0) {
+      const html = await currentPage.content().catch(() => "");
+      const hasResults = /mosaic-jobResults|job_seen_beacon|jobsearch-ResultsList/.test(html);
+      const hasNoResults = /did not match any jobs|no results|0 jobs found/i.test(html);
+      const blocked = await isBlocked(currentPage);
+      console.warn(
+        `[indeed]   diagnostic: results-container=${hasResults} no-results-page=${hasNoResults} blocked=${blocked} url=${currentPage.url()}`
+      );
+      break;
+    }
+
+    for (const c of cards) {
+      if (!c.title || !c.jk) continue;
+      jobs.push({
+        source: "indeed",
+        sourceJobId: c.jk,
+        url: `${host}/viewjob?jk=${c.jk}`,
+        company: c.company || "Unknown",
+        title: c.title,
+        location: c.location,
+        remote: /remote/i.test(c.location) || /remote/i.test(c.snippet),
+        description: c.snippet || "",
+        postedAt: parsePostedAt(c.dateRaw),
+      });
+    }
+
+    await currentPage.waitForTimeout(1500 + Math.floor(Math.random() * 800));
   }
 
-  console.log(`[indeed] ✓ Scrape complete! Total jobs: ${jobs.length}`);
   return jobs;
 }
 
-/**
- * Fetch full job description from Indeed job detail page using Playwright.
- */
-export async function fetchIndeedJobDetail(jobKey: string, location = ""): Promise<string> {
-  const ctx = await getScraperContext();
-  const page = ctx.pages()[0] || await ctx.newPage();
-  
-  const baseUrl = getIndeedDomain(location);
-  const jobUrl = `${baseUrl}/viewjob?jk=${jobKey}`;
-
-  try {
-    await page.goto(jobUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
-    await page.waitForTimeout(1500 + Math.random() * 500);
-
-    // Handle CAPTCHA if present
-    await handleVerification(page);
-
-    // Extract job description with multiple selectors
-    const jobData = await page.evaluate(() => {
-      // Description selectors
-      const descSelectors = [
-        '#jobDescriptionText',
-        '[data-testid="jobDescriptionText"]',
-        '.jobsearch-jobDescriptionText',
-        '.jobsearch-JobComponent-description',
-        '#jobDescription',
-        '.job-description',
-      ];
-      
-      let description = '';
-      for (const sel of descSelectors) {
-        const el = document.querySelector(sel);
-        if (el?.textContent?.trim()) {
-          description = el.textContent.trim();
-          break;
-        }
-      }
-
-      // Also extract additional metadata
-      const salaryEl = document.querySelector('#salaryInfoAndJobType, .jobsearch-JobMetadataHeader-item');
-      const salary = salaryEl?.textContent?.trim() || '';
-
-      const companyEl = document.querySelector('[data-testid="inlineHeader-companyName"], .jobsearch-InlineCompanyRating-companyHeader');
-      const company = companyEl?.textContent?.trim() || '';
-
-      const locationEl = document.querySelector('[data-testid="inlineHeader-companyLocation"], .jobsearch-JobInfoHeader-subtitle');
-      const location = locationEl?.textContent?.trim() || '';
-
-      return { description, salary, company, location };
-    });
-
-    return jobData.description;
-  } catch (e: any) {
-    console.log(`[indeed] Error fetching job detail for ${jobKey}: ${e?.message}`);
-    return "";
-  }
+async function isBlocked(page: any): Promise<boolean> {
+  const body = (await page.locator("body").innerText().catch(() => "")) || "";
+  if (
+    /verify you are human|verifying you are human|just a moment|please complete the security check|additional verification required/i.test(
+      body
+    )
+  )
+    return true;
+  if ((await page.locator("iframe[src*='challenges.cloudflare']").count().catch(() => 0)) > 0)
+    return true;
+  return false;
 }
 
-/**
- * Login to Indeed account for better results and access.
- * Opens the login page and waits for user to complete login.
- */
-export async function loginToIndeed(): Promise<boolean> {
-  const ctx = await getScraperContext();
-  const page = ctx.pages()[0] || await ctx.newPage();
-  
-  console.log("[indeed] Opening Indeed login page...");
-  await page.goto("https://secure.indeed.com/auth", { waitUntil: "domcontentloaded" });
-  
-  // Check if already logged in
-  const isLoggedIn = await page.evaluate(() => {
-    return document.querySelector('[data-gnav-element-name="SignedInAccountMenu"]') !== null ||
-           document.querySelector('.gnav-Account') !== null;
-  });
+async function extractCards(page: any): Promise<any[]> {
+  return page
+    .evaluate(() => {
+      function pickText(el: Element | null): string {
+        return (el?.textContent || "").replace(/\s+/g, " ").trim();
+      }
+      function findCard(anchor: Element): Element {
+        let n: Element | null = anchor;
+        while (n && n !== document.body) {
+          if (
+            n.matches?.(
+              "div.job_seen_beacon, [data-testid='slider_item'], li.eu4oa1w0, td.resultContent, div.cardOutline"
+            )
+          )
+            return n;
+          n = n.parentElement;
+        }
+        return anchor.parentElement || anchor;
+      }
+      function extractJk(node: Element): string {
+        const own = node.getAttribute("data-jk");
+        if (own) return own;
+        const child = node.querySelector("[data-jk]") as HTMLElement | null;
+        if (child?.getAttribute("data-jk")) return child.getAttribute("data-jk")!;
+        const a = node.querySelector("a[href*='jk=']") as HTMLAnchorElement | null;
+        const m = a?.href.match(/[?&]jk=([^&]+)/);
+        return m?.[1] || "";
+      }
 
-  if (isLoggedIn) {
-    console.log("[indeed] ✓ Already logged in!");
-    return true;
-  }
+      const anchors = Array.from(
+        document.querySelectorAll(
+          "a[href*='/viewjob?'], a[href*='/rc/clk?'], a[data-jk]"
+        )
+      );
+      const seen = new Map<string, any>();
+      for (const a of anchors) {
+        const card = findCard(a);
+        const jk = extractJk(card) || extractJk(a);
+        if (!jk || seen.has(jk)) continue;
 
-  console.log("[indeed] Please log in to your Indeed account in the browser window...");
-  console.log("[indeed] Waiting up to 3 minutes for login...");
+        const titleEl =
+          card.querySelector("h2.jobTitle span[title]") ||
+          card.querySelector("h2.jobTitle a span") ||
+          card.querySelector("h2.jobTitle") ||
+          card.querySelector("[data-testid='jobTitle']") ||
+          a.querySelector("span[title]") ||
+          a;
+        const title =
+          (titleEl as HTMLElement | null)?.getAttribute?.("title") || pickText(titleEl);
 
-  try {
-    await page.waitForFunction(() => {
-      return document.querySelector('[data-gnav-element-name="SignedInAccountMenu"]') !== null ||
-             document.querySelector('.gnav-Account') !== null ||
-             window.location.href.includes('/jobs') ||
-             window.location.href.includes('/myresume');
-    }, { timeout: 180000 });
-    
-    console.log("[indeed] ✓ Login successful!");
-    return true;
-  } catch {
-    console.log("[indeed] ✗ Login timeout - continuing without login");
-    return false;
-  }
+        const company =
+          pickText(card.querySelector("[data-testid='company-name']")) ||
+          pickText(card.querySelector("span.companyName")) ||
+          pickText(card.querySelector("[data-testid='inlineHeader-companyName']")) ||
+          "";
+
+        const loc =
+          pickText(card.querySelector("[data-testid='text-location']")) ||
+          pickText(card.querySelector("div.companyLocation")) ||
+          pickText(card.querySelector("[data-testid='inlineHeader-companyLocation']")) ||
+          "";
+
+        const snippet =
+          pickText(card.querySelector("[data-testid='belowJobSnippet']")) ||
+          pickText(card.querySelector("div.job-snippet")) ||
+          pickText(card.querySelector("ul")) ||
+          "";
+
+        const dateRaw =
+          pickText(card.querySelector("[data-testid='myJobsStateDate']")) ||
+          pickText(card.querySelector("span.date")) ||
+          pickText(card.querySelector("[data-testid='job-age']")) ||
+          "";
+
+        if (!title) continue;
+        seen.set(jk, { jk, title, company, location: loc, snippet, dateRaw });
+      }
+      return Array.from(seen.values());
+    })
+    .catch((e: any) => {
+      console.warn(`[indeed] evaluate threw: ${e?.message ?? e}`);
+      return [] as any[];
+    });
 }

@@ -70,8 +70,9 @@ export default function IngestView() {
         <div className="section" style={{ maxWidth: 720 }}>
           <h4>Fetch latest from all curated companies</h4>
           <p style={{ color: "var(--muted)", fontSize: 12, marginTop: 0 }}>
-            Pulls Greenhouse + Lever + Ashby boards for ~50 top tech companies in parallel
-            and keeps only postings within the time window.
+            Pulls Greenhouse + Lever + Ashby boards for ~50 top tech companies, plus broad
+            keyword sweeps on LinkedIn and Indeed (India + Remote) — all in parallel, keeping
+            only postings within the time window.
           </p>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <label style={{ color: "var(--muted)", fontSize: 12 }}>Time window:</label>
