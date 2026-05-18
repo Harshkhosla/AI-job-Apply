@@ -11,7 +11,9 @@ export default function JobsView({ preset }: JobsViewProps = {}) {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
-  const [pageSize] = useState(25);
+  // Default to 10 jobs per page so the "Select page" button picks the
+  // batch-apply maximum in one click.
+  const [pageSize, setPageSize] = useState(10);
   const [selected, setSelected] = useState<Job | null>(null);
   // LinkedIn-only mode: `source` pinned to "linkedin", default sort flipped
   // to `postedAt` so "latest first" is the natural ordering.
@@ -48,12 +50,12 @@ export default function JobsView({ preset }: JobsViewProps = {}) {
     }
   }
 
-  // Reset to page 1 whenever filters change
+  // Reset to page 1 whenever filters or page size change
   useEffect(() => {
     setPage(1);
     load(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filters]);
+  }, [filters, pageSize]);
 
   // If a fresh preset is passed in, apply it.
   // LinkedIn-only mode: `source` stays pinned regardless of preset.
@@ -194,6 +196,39 @@ export default function JobsView({ preset }: JobsViewProps = {}) {
           Clear scores
         </button>
         */}
+        <select
+          value={String(pageSize)}
+          onChange={(e) => setPageSize(Number(e.target.value))}
+          title="Jobs per page"
+        >
+          <option value="10">10 / page</option>
+          <option value="25">25 / page</option>
+          <option value="50">50 / page</option>
+        </select>
+        <button
+          onClick={() => {
+            // Select up to 10 visible jobs (batch-apply cap).
+            setSelectedIds((prev) => {
+              const merged = [...prev];
+              for (const j of jobs) {
+                if (merged.length >= 10) break;
+                if (!merged.includes(j.id)) merged.push(j.id);
+              }
+              return merged;
+            });
+          }}
+          disabled={jobs.length === 0 || selectedIds.length >= 10}
+          title="Select up to 10 jobs from this page for batch apply"
+        >
+          Select page ({Math.min(10, jobs.length)})
+        </button>
+        <button
+          onClick={() => setSelectedIds([])}
+          disabled={selectedIds.length === 0}
+          title="Clear current selection"
+        >
+          Clear
+        </button>
         <button
           className="primary"
           onClick={() => setBatchModal(true)}

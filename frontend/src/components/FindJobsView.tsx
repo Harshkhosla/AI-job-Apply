@@ -54,7 +54,9 @@ export default function FindJobsView({ onDone }: Props) {
   const [keywords, setKeywords] = useState("full stack engineer");
   // LinkedIn-only mode capped at 5 days (server-enforced). Older options removed.
   const [hours, setHours] = useState<"24" | "48" | "72" | "120" | "">("48");
-  const [easyApplyOnly, setEasyApplyOnly] = useState(false);
+  // LinkedIn-only mode: always restrict ingest to Easy Apply postings so the
+  // auto-apply flow can actually act on them. Toggle is hidden in the UI.
+  const [easyApplyOnly, setEasyApplyOnly] = useState(true);
   const [pages, setPages] = useState(2);
 
   const [busy, setBusy] = useState(false);
